@@ -63,6 +63,39 @@ namespace DaoDenLong.Core
 
         public double IslandRadius = 40.0;        // Night 1 - Đảo Bến, cloud sea beyond the rim
 
+        // Numbers Ticket-02 pins down for Phase 2. The five published in the contract tuning block first.
+        public double DashSpeed = 14.0;           // m/s
+        public double DashDurationS = 0.2;        // 12 ticks
+        public double DashCooldownS = 1.5;        // 90 ticks, counted from the dash start
+        public int Night2DurationS = 330;
+        public int Night3DurationS = 360;
+
+        // The rest Ticket-02 standardises but does not publish as contract keys.
+        public int DashDurationTicks = 12;
+        public int DashCooldownTicks = 90;
+        public double CharmRunSpeed = 7.2;        // Bùa Gió: run speed while it lasts
+        public int CharmDurationTicks = 600;      // refreshed by a re-pickup
+        public int CharmRespawnTicks = 2700;      // the charm reappears at its own spot
+        public double WindPushSpeed = 2.0;        // Night 3: a gust pushes Mây for 5 s every 30 s
+        public int WindGustEveryTicks = 1800;
+        public int WindGustTicks = 300;
+        public double DrifterFlySpeed = 7.0;      // Gió Lạc chase and flee speed
+        public double DrifterIdleSpeed = 2.0;     // idle: a slow glide
+        public int DrifterMax = 2;                // at most two on the island
+        public int DrifterSpawnStartTick = 1200;  // one at 1200, 2400, ...
+        public int DrifterSpawnEvery = 1200;
+        public int DrifterChaseMinCarried = 5;    // idle -> chase: carrying >= 5 and no more than 15 m away
+        public double DrifterChaseRange = 15.0;
+        public double DrifterStealRadius = 1.2;   // the XZ contact distance
+        public int DrifterStealMax = 3;           // steals min(3, carried); once per drifter, ever
+        public int DrifterFleeTicks = 240;        // then it vanishes with what it carries
+        public int DrifterDropVanishTicks = 120;  // a freed drifter vanishes 120 ticks after the drop
+        public double ShadeSpeedNight3 = 4.5;     // the standard table: the Night 3 number only
+        public int ShadeEveryNight2 = 420;        // one every 7 s after tick 300, at most 8
+        public int ShadeMaxNight2 = 8;
+        public int ShadeEveryNight3 = 360;        // one every 6 s after tick 300, at most 10
+        public int ShadeMaxNight3 = 10;
+
         public static Tuning Standard() { return new Tuning(); }
 
         /// <summary>The "tuning" object of game.contract.json, keys in the order the PRD lists them.</summary>
@@ -88,6 +121,12 @@ namespace DaoDenLong.Core
             o.Set("shade_speed", JsonValue.Real(ShadeSpeed, 1));
             o.Set("shade_hit_radius", JsonValue.Real(ShadeHitRadius, 1));
             o.Set("fall_enabled", JsonValue.Bool(FallEnabled));
+            // v1.1 adds exactly these five keys, in this order, as Ticket-02 spells them.
+            o.Set("dash_speed", JsonValue.Real(DashSpeed, 1));
+            o.Set("dash_duration_s", JsonValue.Real(DashDurationS, 1));
+            o.Set("dash_cooldown_s", JsonValue.Real(DashCooldownS, 1));
+            o.Set("night2_duration_s", JsonValue.Int(Night2DurationS));
+            o.Set("night3_duration_s", JsonValue.Int(Night3DurationS));
             JsonValue s = JsonValue.Obj();
             s.Set("per_mote", JsonValue.Int(ScorePerMote));
             s.Set("per_lantern", JsonValue.Int(ScorePerLantern));
@@ -129,7 +168,7 @@ namespace DaoDenLong.Core
         }
     }
 
-    /// <summary>Snapshot line, the Test Contract v1.0 shape, plus the recommended motes array.</summary>
+    /// <summary>Snapshot line, the Test Contract v1.1 shape: v1.0 plus night, wind, the player fields and the three arrays.</summary>
     public sealed class Snapshot
     {
         public long Tick, SimTick, Score;
@@ -141,6 +180,14 @@ namespace DaoDenLong.Core
         public List<Shade> Shades = new List<Shade>();
         public List<Mote> Motes = new List<Mote>();
 
+        // v1.1 additions.
+        public int Night;
+        public bool WindActive;
+        public double WindDirDeg;
+        public Player PlayerRef;
+        public List<Drifter> Drifters = new List<Drifter>();
+        public List<Charm> Charms = new List<Charm>();
+
         public JsonValue ToJson()
         {
             JsonValue o = JsonValue.Obj();
@@ -150,11 +197,26 @@ namespace DaoDenLong.Core
             o.Set("state", JsonValue.Str(State));
             o.Set("time_left_s", JsonValue.Real(Math.Round(TimeLeftS, 3, MidpointRounding.AwayFromZero), 3));
             o.Set("score", JsonValue.Int(Score));
+            o.Set("night", JsonValue.Int(Night));
+
+            JsonValue w = JsonValue.Obj();
+            w.Set("active", JsonValue.Bool(WindActive));
+            w.Set("dir_deg", JsonValue.Real(Math.Round(WindDirDeg, 1, MidpointRounding.AwayFromZero), 1));
+            o.Set("wind", w);
 
             JsonValue p = JsonValue.Obj();
             p.Set("pos", SnapshotData.Pos(PlayerPos, 3));
             p.Set("flames", JsonValue.Int(Flames));
             p.Set("carried", JsonValue.Int(Carried));
+            if (PlayerRef != null)
+            {
+                p.Set("vel", SnapshotData.Pos(PlayerRef.Vel, 3));
+                p.Set("grounded", JsonValue.Bool(PlayerRef.Grounded));
+                p.Set("invuln", JsonValue.Int(PlayerRef.InvulnTicks));
+                p.Set("dash_cd_s", JsonValue.Real(Math.Round(PlayerRef.DashCdTicks / (double)Simulation.TicksPerSecond, 3, MidpointRounding.AwayFromZero), 3));
+                p.Set("pulse_cd_s", JsonValue.Real(Math.Round(PlayerRef.PulseCdTicks / (double)Simulation.TicksPerSecond, 3, MidpointRounding.AwayFromZero), 3));
+                p.Set("charm_s", JsonValue.Real(Math.Round(PlayerRef.CharmTicksLeft / (double)Simulation.TicksPerSecond, 3, MidpointRounding.AwayFromZero), 3));
+            }
             o.Set("player", p);
 
             JsonValue ls = JsonValue.Arr();
@@ -186,10 +248,39 @@ namespace DaoDenLong.Core
                 JsonValue mj = JsonValue.Obj();
                 mj.Set("id", JsonValue.Str(m.Id));
                 mj.Set("pos", SnapshotData.Pos(m.Pos, 3));
+                mj.Set("kind", JsonValue.Str(m.Dropped ? "dropped" : "random"));
+                mj.Set("ttl_s", m.Dropped
+                    ? JsonValue.Real(Math.Round(m.TtlTicks / (double)Simulation.TicksPerSecond, 3, MidpointRounding.AwayFromZero), 3)
+                    : JsonValue.Null());
                 ms.Add(mj);
             }
             o.Set("motes", ms);
             o.Set("motes_active", JsonValue.Int(Motes.Count));
+
+            JsonValue ds = JsonValue.Arr();
+            foreach (Drifter d in Drifters)
+            {
+                JsonValue dj = JsonValue.Obj();
+                dj.Set("id", JsonValue.Str(d.Id));
+                dj.Set("pos", SnapshotData.Pos(d.Pos, 3));
+                dj.Set("state", JsonValue.Str(d.State));
+                dj.Set("stolen", JsonValue.Int(d.Stolen));
+                ds.Add(dj);
+            }
+            o.Set("drifters", ds);
+
+            JsonValue cs = JsonValue.Arr();
+            foreach (Charm c in Charms)
+            {
+                JsonValue cj = JsonValue.Obj();
+                cj.Set("id", JsonValue.Str(c.Id));
+                cj.Set("pos", SnapshotData.Pos(c.Pos, 3));
+                cj.Set("available", JsonValue.Bool(c.Available));
+                if (!c.Available)
+                    cj.Set("respawn_s", JsonValue.Real(Math.Round(c.RespawnTicks / (double)Simulation.TicksPerSecond, 3, MidpointRounding.AwayFromZero), 3));
+                cs.Add(cj);
+            }
+            o.Set("charms", cs);
             return o;
         }
     }
@@ -231,7 +322,15 @@ namespace DaoDenLong.Core
         private readonly List<SimEvent> _pending = new List<SimEvent>();
         private int _nextShadeIndex, _nextMoteIndex;
         private bool _over, _bonusApplied;
-        private string _overReason;
+        // v1.1 additions: drifters, charms, the Night number, wind, pause.
+        public int Night = 1;
+        public bool WindActive;
+        public double WindDirDeg;
+        public bool Paused;
+        public List<Drifter> Drifters = new List<Drifter>();
+        public List<Charm> Charms = new List<Charm>();
+        private bool _prevPause, _prevDash;
+        private bool _randomDrifters = true, _windEnabled;        private string _overReason;
         private bool _randomMotes = true, _randomShades = true;
         private int _lastFallLost;                        // motes vanished on the last fall (for the Phase 2 event field)
         private bool _prevJump, _prevInteract, _prevPulse;    // action edges (contract section C)
@@ -253,6 +352,10 @@ namespace DaoDenLong.Core
             _nextShadeIndex = 0; _nextMoteIndex = 0;
             _randomMotes = true; _randomShades = true;
             _prevJump = false; _prevInteract = false; _prevPulse = false;
+            Night = 1; WindActive = false; WindDirDeg = 0; Paused = false;
+            _prevPause = false; _prevDash = false;
+            _randomDrifters = true; _windEnabled = false;
+            Drifters.Clear(); Charms.Clear();
             DurationS = T.Night1DurationS;
 
             // Five big lanterns: L1 straight ahead on +Z, the rest on a pentagon of radius 25 m.
@@ -334,6 +437,13 @@ namespace DaoDenLong.Core
                 Player.Carried = sc.Carried;
                 Player.Flames = sc.Flames;
             }
+            if (sc.HasPlayerTicks)  // v1.1 setup counters, applied as given
+            {
+                Player.InvulnTicks = sc.PlayerInvulnTicks;
+                Player.DashCdTicks = sc.PlayerDashCdTicks;
+                Player.PulseCdTicks = sc.PlayerPulseCdTicks;
+                Player.CharmTicksLeft = sc.PlayerCharmTicks;
+            }
             _randomMotes = sc.RandomMotes;
             _randomShades = sc.RandomShades;
             if (sc.HasMotes)
@@ -349,10 +459,12 @@ namespace DaoDenLong.Core
                 Shades.Clear();
                 foreach (ShadeSpec sp in sc.Shades)
                 {
-                    Shade s = new Shade { Hover = 1.0, Pos = sp.Pos };
+                    Shade s = new Shade { Hover = 1.0, Pos = sp.Pos, State = ShadeState.wander };
                     s.Id = string.IsNullOrEmpty(sp.Id)
                         ? "S" + (++_nextShadeIndex).ToString(CultureInfo.InvariantCulture)
                         : sp.Id;
+                    if (sp.HasState) s.State = sp.State;
+                    if (sp.HasStateTicksLeft) s.StateTicksLeft = sp.StateTicksLeft;
                     Shades.Add(s);
                 }
             }
@@ -364,6 +476,19 @@ namespace DaoDenLong.Core
                 if (lu.HasPos) l.Pos = lu.Pos;
                 if (lu.HasLit) l.Lit = lu.Lit;
                 if (lu.HasDeposited) l.Deposited = lu.Deposited;
+            }
+            if (sc.HasRandomDrifters) _randomDrifters = sc.RandomDrifters;
+            if (sc.HasWindEnabled) _windEnabled = sc.WindEnabled;
+            if (sc.HasDrifters)
+            {
+                Drifters.Clear();
+                foreach (DrifterSpec d in sc.Drifters) Drifters.Add(new Drifter { Id = d.Id, Pos = d.Pos });
+            }
+            if (sc.HasCharms)
+            {
+                Charms.Clear();
+                foreach (CharmSpec c in sc.Charms)
+                    Charms.Add(new Charm { Id = c.Id, Pos = c.Pos, Available = !c.HasAvailable || c.Available });
             }
             if (!double.IsNaN(sc.TimeLeftS)) DurationS = sc.TimeLeftS;  // at tick 0, time_left_s is that value
         }
@@ -385,18 +510,38 @@ namespace DaoDenLong.Core
             if (input == null) input = new InputFrame();
 
             Tick++;
-            SimTick++;
             CamYawDeg = input.CamYawDeg;
+
+            // Step 1: read the input, handling pause first. Turning pause on stops the step right
+            // here — the tick counter advances but sim time, cooldowns, spawns and TTLs hold still.
+            bool firePause = input.Pause && !_prevPause;
+            _prevPause = input.Pause;
+            if (firePause && !Paused)
+            {
+                Paused = true; State = "paused";
+                Raise(new SimEvent(Tick, "paused"));
+                return;
+            }
+            if (firePause && Paused)
+            {
+                Paused = false; State = "playing";
+                Raise(new SimEvent(Tick, "resumed"));
+            }
+            if (Paused) return;     // frozen: nothing below this line runs, no input edge is consumed
+
+            SimTick++;
 
             // Contract section C: an action fires on the false -> true edge, not while a key is held.
             bool fireJump = input.Jump && !_prevJump;
             bool fireInteract = input.Interact && !_prevInteract;
             bool firePulse = input.Pulse && !_prevPulse;
             _prevJump = input.Jump; _prevInteract = input.Interact; _prevPulse = input.Pulse;
+            bool fireDash = input.Dash && !_prevDash;
+            _prevDash = input.Dash;
 
             // The order Ticket-02 pins down, adopted in Phase 1 so later phases add nothing to it.
             DecrementCounters();      // 2. timers
-            MovePlayer(input, fireJump);   // 3. movement and jump, then the fall check
+            MovePlayer(input, fireJump, fireDash);   // 3. movement and jump, then the fall check
             if (T.FallEnabled) CheckFall();
             Pickups();                // 4. motes
             Interact(fireInteract);   // 5. lanterns
@@ -415,6 +560,8 @@ namespace DaoDenLong.Core
             s.Tick = Tick; s.SimTick = SimTick; s.State = State; s.TimeLeftS = TimeLeftS; s.Score = Score;
             s.PlayerPos = Player.Pos; s.Flames = Player.Flames; s.Carried = Player.Carried;
             s.Lanterns = SortedLanterns(); s.Shades = SortedShades(); s.Motes = SortedMotes();
+            s.Night = Night; s.WindActive = WindActive; s.WindDirDeg = WindDirDeg;
+            s.PlayerRef = Player; s.Drifters = SortedDrifters(); s.Charms = SortedCharms();
             return s;
         }
 
@@ -422,6 +569,8 @@ namespace DaoDenLong.Core
         {
             if (Player.InvulnTicks > 0) Player.InvulnTicks--;
             if (Player.PulseCdTicks > 0) Player.PulseCdTicks--;
+            if (Player.DashCdTicks > 0) Player.DashCdTicks--;
+            if (Player.CharmTicksLeft > 0) Player.CharmTicksLeft--;
             if (Player.FallWaitTicks > 0)
             {
                 Player.FallWaitTicks--;
@@ -429,6 +578,7 @@ namespace DaoDenLong.Core
             }
             foreach (Shade s in Shades)
             {
+                if (s.State == ShadeState.spawning) s.State = ShadeState.wander;   // a shade is "spawning" only on its birth tick
                 if (s.StateTicksLeft > 0)
                 {
                     s.StateTicksLeft--;
@@ -448,7 +598,7 @@ namespace DaoDenLong.Core
             }
         }
 
-        private void MovePlayer(InputFrame input, bool jump)
+        private void MovePlayer(InputFrame input, bool jump, bool dash)
         {
             if (Player.FallWaitTicks > 0) return;     // the body is away: nothing moves, nothing is picked up
 
@@ -459,11 +609,32 @@ namespace DaoDenLong.Core
             double wx = mx * Math.Cos(theta) + mz * Math.Sin(theta);
             double wz = -mx * Math.Sin(theta) + mz * Math.Cos(theta);
 
-            double vx = wx * T.PlayerSpeed, vz = wz * T.PlayerSpeed;
+            // v1.1 dash: rising edge, off cooldown. The direction is the movement direction, or the
+            // facing when standing still; it is locked for the whole window. No invulnerability, and
+            // the cooldown counts from the moment the dash starts.
+            if (dash && Player.DashCdTicks == 0 && Player.DashTicksLeft == 0)
+            {
+                double dx = wx, dz = wz;
+                if (dx * dx + dz * dz < 1e-12) { dx = Math.Sin(theta); dz = Math.Cos(theta); }
+                double dl = Math.Sqrt(dx * dx + dz * dz);
+                Player.DashDirX = dx / dl; Player.DashDirZ = dz / dl;
+                Player.DashTicksLeft = T.DashDurationTicks;
+                if (Player.CharmTicksLeft == 0) Player.DashCdTicks = T.DashCooldownTicks;
+                Raise(new SimEvent(Tick, "dash"));
+            }
+            bool dashing = Player.DashTicksLeft > 0;
+            if (dashing) { wx = Player.DashDirX; wz = Player.DashDirZ; }
+
+            double sp = dashing ? T.DashSpeed : (Player.CharmTicksLeft > 0 ? T.CharmRunSpeed : T.PlayerSpeed);
+            double vx = wx * sp, vz = wz * sp;
             double vy = Player.Vel.Y;
 
-            if (jump && Player.Grounded) vy = T.JumpVelocity;    // jump only from the ground
-            if (!Player.Grounded || jump) vy += T.Gravity / TicksPerSecond;
+            if (dashing && !jump) vy = 0;             // an air dash keeps the altitude
+            else
+            {
+                if (jump && Player.Grounded) vy = T.JumpVelocity;    // jump only from the ground
+                if (!Player.Grounded || jump) vy += T.Gravity / TicksPerSecond;
+            }
 
             V3 np = new V3(Player.Pos.X + vx / TicksPerSecond,
                            Player.Pos.Y + vy / TicksPerSecond,
@@ -484,6 +655,7 @@ namespace DaoDenLong.Core
             Player.Pos = np;
             Player.Vel = new V3(vx, vy, vz);
             if (len > 1e-12) Player.FacingDeg = Math.Atan2(wz, wx) * 180.0 / Math.PI;
+            if (dashing) Player.DashTicksLeft--;   // the window counts down over the ticks it runs
         }
 
         private bool OnIsland(V3 p) { return Math.Sqrt(p.X * p.X + p.Z * p.Z) <= T.IslandRadius; }
@@ -792,6 +964,20 @@ namespace DaoDenLong.Core
         }
 
         // Output order is by numeric id, so two runs of the same seed print the same lines.
+        private List<Drifter> SortedDrifters()
+        {
+            List<Drifter> l = new List<Drifter>(Drifters);
+            l.Sort((a, b) => NaturalCompare(a.Id, b.Id));
+            return l;
+        }
+
+        private List<Charm> SortedCharms()
+        {
+            List<Charm> l = new List<Charm>(Charms);
+            l.Sort((a, b) => NaturalCompare(a.Id, b.Id));
+            return l;
+        }
+
         private List<Shade> SortedShades()
         {
             List<Shade> l = new List<Shade>(Shades);

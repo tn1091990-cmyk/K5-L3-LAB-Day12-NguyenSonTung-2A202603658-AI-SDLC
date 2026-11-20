@@ -34,6 +34,11 @@ namespace DaoDenLong.Core
                     sc.Flames = (int)Need(p.Get("flames"), "player.flames").Num(-1);
                     if (sc.Flames < 0) throw new FormatException("scenario: player.flames must be >= 0");
                 }
+                // v1.1 setup counters, all integer ticks >= 0.
+                if (p.Get("invuln_ticks") != null) { sc.HasPlayerTicks = true; sc.PlayerInvulnTicks = NonNegInt(p.Get("invuln_ticks"), "player.invuln_ticks"); }
+                if (p.Get("dash_cd_ticks") != null) { sc.HasPlayerTicks = true; sc.PlayerDashCdTicks = NonNegInt(p.Get("dash_cd_ticks"), "player.dash_cd_ticks"); }
+                if (p.Get("pulse_cd_ticks") != null) { sc.HasPlayerTicks = true; sc.PlayerPulseCdTicks = NonNegInt(p.Get("pulse_cd_ticks"), "player.pulse_cd_ticks"); }
+                if (p.Get("charm_ticks") != null) { sc.HasPlayerTicks = true; sc.PlayerCharmTicks = NonNegInt(p.Get("charm_ticks"), "player.charm_ticks"); }
             }
 
             if (root.Get("random_motes") != null)
@@ -45,6 +50,16 @@ namespace DaoDenLong.Core
             {
                 RequireBool(root.Get("random_shades"), "random_shades");
                 sc.RandomShades = root.Get("random_shades").B;
+            }
+            if (root.Get("random_drifters") != null)
+            {
+                RequireBool(root.Get("random_drifters"), "random_drifters");
+                sc.HasRandomDrifters = true; sc.RandomDrifters = root.Get("random_drifters").B;
+            }
+            if (root.Get("wind_enabled") != null)
+            {
+                RequireBool(root.Get("wind_enabled"), "wind_enabled");
+                sc.HasWindEnabled = true; sc.WindEnabled = root.Get("wind_enabled").B;
             }
 
             JsonValue motes = root.Get("motes");
@@ -74,6 +89,22 @@ namespace DaoDenLong.Core
                     if (v == null) throw new FormatException("scenario: shades[" + i + "].pos must be [x, y, z]");
                     sp.Pos = new V3(v[0], v[1], v[2]);
                     if (s.Get("id") != null) sp.Id = Need(s.Get("id"), "shades[" + i + "].id").Text(null);
+                    if (s.Get("state") != null)
+                    {
+                        string st = Need(s.Get("state"), "shades[" + i + "].state").Text(null);
+                        if (st != "spawning" && st != "wander" && st != "chase" && st != "recoil" && st != "stunned")
+                            throw new FormatException("scenario: shades[" + i + "].state must be one of spawning/wander/chase/recoil/stunned");
+                        sp.HasState = true;
+                        sp.State = st == "spawning" ? ShadeState.spawning
+                             : st == "wander" ? ShadeState.wander
+                             : st == "chase" ? ShadeState.chase
+                             : st == "recoil" ? ShadeState.recoil : ShadeState.stunned;
+                    }
+                    if (s.Get("state_ticks_left") != null)
+                    {
+                        sp.HasStateTicksLeft = true;
+                        sp.StateTicksLeft = NonNegInt(s.Get("state_ticks_left"), "shades[" + i + "].state_ticks_left");
+                    }
                     sc.Shades.Add(sp);
                 }
             }
@@ -99,6 +130,45 @@ namespace DaoDenLong.Core
                         if (lu.Deposited < 0) throw new FormatException("scenario: deposited must be >= 0");
                     }
                     sc.Lanterns.Add(lu);
+                }
+            }
+
+            JsonValue drifters = root.Get("drifters");
+            if (drifters != null)
+            {
+                if (drifters.Type != JsonValue.Kind.Arr) throw new FormatException("scenario: \"drifters\" must be an array");
+                sc.HasDrifters = true;
+                for (int i = 0; i < drifters.Arr_.Count; i++)
+                {
+                    JsonValue d = drifters.Arr_[i];
+                    if (d.Type != JsonValue.Kind.Obj) throw new FormatException("scenario: drifters[" + i + "] must be an object");
+                    JsonValue id = d.Get("id");
+                    if (id == null || id.Type != JsonValue.Kind.Str) throw new FormatException("scenario: drifters[" + i + "] needs an \"id\"");
+                    DrifterSpec ds = new DrifterSpec { Id = id.S };
+                    double[] v = Vec3(d.Get("pos"), "drifters[" + i + "].pos");
+                    if (v == null) throw new FormatException("scenario: drifters[" + i + "].pos must be [x, y, z]");
+                    ds.Pos = new V3(v[0], v[1], v[2]);
+                    sc.Drifters.Add(ds);
+                }
+            }
+
+            JsonValue charms = root.Get("charms");
+            if (charms != null)
+            {
+                if (charms.Type != JsonValue.Kind.Arr) throw new FormatException("scenario: \"charms\" must be an array");
+                sc.HasCharms = true;
+                for (int i = 0; i < charms.Arr_.Count; i++)
+                {
+                    JsonValue c = charms.Arr_[i];
+                    if (c.Type != JsonValue.Kind.Obj) throw new FormatException("scenario: charms[" + i + "] must be an object");
+                    JsonValue id = c.Get("id");
+                    if (id == null || id.Type != JsonValue.Kind.Str) throw new FormatException("scenario: charms[" + i + "] needs an \"id\"");
+                    CharmSpec cs = new CharmSpec { Id = id.S };
+                    double[] v = Vec3(c.Get("pos"), "charms[" + i + "].pos");
+                    if (v == null) throw new FormatException("scenario: charms[" + i + "].pos must be [x, y, z]");
+                    cs.Pos = new V3(v[0], v[1], v[2]);
+                    if (c.Get("available") != null) { RequireBool(c.Get("available"), "charms[" + i + "].available"); cs.HasAvailable = true; cs.Available = c.Get("available").B; }
+                    sc.Charms.Add(cs);
                 }
             }
 
@@ -129,7 +199,7 @@ namespace DaoDenLong.Core
             if (tickCount <= 0) return outFrames;
 
             double mx = 0, mz = 0, yaw = 0;
-            bool jump = false, interact = false, pulse = false;
+            bool jump = false, interact = false, pulse = false, dash = false, pause = false;
             int next = 0;
             long prevTick = -1;
 
@@ -165,6 +235,8 @@ namespace DaoDenLong.Core
                     if (f.Get("jump") != null) { RequireBool(f.Get("jump"), "jump"); jump = f.Get("jump").B; }
                     if (f.Get("interact") != null) { RequireBool(f.Get("interact"), "interact"); interact = f.Get("interact").B; }
                     if (f.Get("pulse") != null) { RequireBool(f.Get("pulse"), "pulse"); pulse = f.Get("pulse").B; }
+                    if (f.Get("dash") != null) { RequireBool(f.Get("dash"), "dash"); dash = f.Get("dash").B; }
+                    if (f.Get("pause") != null) { RequireBool(f.Get("pause"), "pause"); pause = f.Get("pause").B; }
                     next++;
                 }
 
@@ -172,7 +244,7 @@ namespace DaoDenLong.Core
                 {
                     Tick = t,
                     MoveX = mx, MoveZ = mz, CamYawDeg = yaw,
-                    Jump = jump, Interact = interact, Pulse = pulse
+                    Jump = jump, Interact = interact, Pulse = pulse, Dash = dash, Pause = pause
                 });
             }
 
@@ -206,6 +278,13 @@ namespace DaoDenLong.Core
         private static void RequireBool(JsonValue v, string what)
         {
             if (v.Type != JsonValue.Kind.Bool) throw new FormatException(what + " must be true or false");
+        }
+
+        private static int NonNegInt(JsonValue v, string what)
+        {
+            if (v.Type != JsonValue.Kind.NumInt) throw new FormatException(what + " must be a whole number");
+            if (v.I < 0) throw new FormatException(what + " must be >= 0");
+            return (int)v.I;
         }
 
         private static double[] Vec3(JsonValue v, string what)

@@ -56,7 +56,8 @@ namespace DaoDenLong.Core
         public int Next(int n) { return n <= 0 ? 0 : (int)(NextUInt64() % (ulong)n); }
     }
 
-    public enum ShadeState { wander, chase, recoil, stunned }
+    /// <summary>v1.1 state names exactly as the board spells them. spawning lasts until the shade's first processed tick.</summary>
+    public enum ShadeState { spawning, wander, chase, recoil, stunned }
 
     public sealed class Shade
     {
@@ -88,6 +89,14 @@ namespace DaoDenLong.Core
         public int PulseCdTicks;
         public int FallWaitTicks;   // > 0 while waiting to respawn: no pickup, no hits
         public double FacingDeg;
+
+        // Phase 2 (v1.1): dash and the Bùa Gió charm.
+        public int DashCdTicks;     // cooldown counted from the moment the dash starts
+        public int DashTicksLeft;   // > 0 while the dash is running (12 ticks)
+        public double DashDirX, DashDirZ;   // direction locked at the start of the dash
+        public int CharmTicksLeft;  // > 0 while Bùa Gió is active (600 ticks, refreshed on re-pickup)
+        public bool Launched;       // a jump pad owns the velocity until the next landing
+        public V3 LaunchVel;        // the launch velocity, kept unchanged until landing
     }
 
     public sealed class Mote
@@ -108,6 +117,29 @@ namespace DaoDenLong.Core
         public int Cost;            // motes needed to light it
     }
 
+    /// <summary>Gió Lạc, the wandering wind (v1.1, Nights 2-3). Reference point: its flying body.</summary>
+    public sealed class Drifter
+    {
+        public string Id;
+        public V3 Pos;
+        public string State = "idle";   // idle / chase / flee / removed, the v1.1 snapshot names
+        public int Stolen;              // motes it is carrying
+        public bool HasStolen;          // each drifter steals at most once, ever
+        public int FleeTicksLeft;       // flee window; then it vanishes with what it carries
+        public int RemovalTicksLeft;    // set when a pulse frees it: vanishes 120 ticks later
+        public int SpawnTick;           // interacts from the tick after it appears
+    }
+
+    /// <summary>Bùa Gió, the red wind charm (v1.1). Pickup follows the mote rules.</summary>
+    public sealed class Charm
+    {
+        public string Id;
+        public V3 Pos;
+        public bool Available = true;
+        public int RespawnTicks;        // counts down only while taken; then it reappears at its spot
+        public int SpawnTick;
+    }
+
     /// <summary>One fixed-tick input frame (Test Contract section C).</summary>
     public sealed class InputFrame
     {
@@ -115,6 +147,7 @@ namespace DaoDenLong.Core
         public double MoveX, MoveZ;
         public double CamYawDeg;
         public bool Jump, Interact, Pulse;
+        public bool Dash, Pause;    // v1.1: both fire on the false -> true edge
     }
 
     /// <summary>One lantern entry of a scenario file: only the fields present in the JSON are applied.</summary>
@@ -131,6 +164,23 @@ namespace DaoDenLong.Core
     {
         public string Id;
         public V3 Pos;
+        public bool HasState; public ShadeState State;   // v1.1
+        public bool HasStateTicksLeft; public int StateTicksLeft;
+    }
+
+    /// <summary>One drifter entry of a scenario file (v1.1): replaces the default drifter list.</summary>
+    public sealed class DrifterSpec
+    {
+        public string Id;
+        public V3 Pos;
+    }
+
+    /// <summary>One charm entry of a scenario file (v1.1): replaces the default charm list.</summary>
+    public sealed class CharmSpec
+    {
+        public string Id;
+        public V3 Pos;
+        public bool HasAvailable; public bool Available;
     }
 
     /// <summary>Scenario file (Test Contract section D). A missing list keeps the level default.</summary>
@@ -146,5 +196,14 @@ namespace DaoDenLong.Core
         public List<ShadeSpec> Shades = new List<ShadeSpec>(); // replaces the default shade list
         public List<LanternUpdate> Lanterns = new List<LanternUpdate>(); // per-id update of the level lanterns
         public double TimeLeftS = double.NaN;
+
+        // Test Contract v1.1: setup counters, the new lists and the two flags.
+        public bool HasPlayerTicks;
+        public int PlayerInvulnTicks, PlayerDashCdTicks, PlayerPulseCdTicks, PlayerCharmTicks;
+        public bool HasRandomDrifters, HasWindEnabled;  // a flag is only applied when the key is present
+        public bool RandomDrifters = true, WindEnabled;
+        public bool HasDrifters, HasCharms;
+        public List<DrifterSpec> Drifters = new List<DrifterSpec>();   // replaces the default drifter list
+        public List<CharmSpec> Charms = new List<CharmSpec>();         // replaces the default charm list
     }
 }

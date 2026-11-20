@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.0",
+  "contract_version": "1.1",
   "team": "2A202603658-nguyen-son-tung",
   "build_cmd": "dotnet build DotNet/DaoDenLong.Headless -c Release",
   "run_cmd": "dotnet run --project DotNet/DaoDenLong.Headless -c Release",
@@ -24,6 +24,11 @@
     "shade_speed": 4.0,
     "shade_hit_radius": 1.0,
     "fall_enabled": true,
+    "dash_speed": 14.0,
+    "dash_duration_s": 0.2,
+    "dash_cooldown_s": 1.5,
+    "night2_duration_s": 330,
+    "night3_duration_s": 360,
     "score": { "per_mote": 10, "per_lantern": 100, "per_stun": 5,
                "per_second_left": 2, "per_flame_left": 50 }
   }

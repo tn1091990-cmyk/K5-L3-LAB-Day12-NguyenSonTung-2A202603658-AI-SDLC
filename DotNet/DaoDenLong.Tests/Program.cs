@@ -43,6 +43,9 @@ namespace DaoDenLong.Tests
                 ("T14 malformed scenario/inputs are rejected (exit code 2 path)", T14_MalformedInput),
                 ("T15 output shape: JSONL lines, 3-decimal coords, early stop, end line last", T15_OutputShape),
                 ("T16 snapshot ids in natural order (S1 < S2 < S10)", T16_NaturalIdOrder),
+                ("T17 dash: 14 m/s x 12 ticks, cooldown 90 from the start, air dash keeps altitude", T17_Dash),
+                ("T18 pause: tick advances, sim frozen, snapshot says paused, resume works", T18_Pause),
+                ("T19 contract v1.1: new tuning keys, new snapshot fields, new format rejections", T19_ContractV11),
             };
 
             foreach (var (name, body) in tests)
@@ -688,6 +691,120 @@ namespace DaoDenLong.Tests
             List<JsonValue> p = EventsNamed(lines, "pulse");
             AssertEq(p.Count, 1, "pulse fired");
             AssertIds(p[0].Get("data").Get("stunned_ids"), "S1", "S2", "S10");
+        }
+
+        // ---- v1.1 tests (Ticket-02 core) ---------------------------------------
+
+        private static void T17_Dash()
+        {
+            // Ground dash: 14 m/s for 12 ticks, direction = movement direction, no invulnerability.
+            List<JsonValue> lines = Run(71, "{\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[],\"lanterns\":[]}",
+                "{\"frames\":[{\"tick\":0,\"move\":[0,1],\"dash\":true}]}", 30, 10);
+            List<JsonValue> ev = EventsNamed(lines, "dash");
+            AssertEq(ev.Count, 1, "one dash event");
+            AssertEq(ev[0].Get("tick").I, 1, "the dash event stamps the tick that completes the step");
+            // Tick 0: input read, dash starts (step 1); 12 dash ticks end at tick 12... the run has no
+            // snapshot between; check total displacement after the window: 12 * 14/60 m, then 6 m/s.
+            double z = Axis(SnapAt(lines, 30).Get("player").Get("pos"), 2);
+            double expected = 12 * 14.0 / 60.0 + 18 * 6.0 / 60.0;   // dash window, then plain run
+            AssertNear(z, expected, 1e-9, "dash window then run speed");
+
+            // Cooldown 90 ticks from the START of the first dash: a second dash pressed before that is ignored.
+            lines = Run(72, "{\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[],\"lanterns\":[]}",
+                "{\"frames\":[{\"tick\":0,\"move\":[0,1],\"dash\":true}," +
+                "{\"tick\":15,\"dash\":false}," +
+                "{\"tick\":30,\"dash\":true}," +                          // mid-cooldown: ignored
+                "{\"tick\":90,\"dash\":false}," +
+                "{\"tick\":95,\"dash\":true}]}",                          // cooldown done: fires
+                120, 10);
+            AssertEq(EventsNamed(lines, "dash").Count, 2, "second dash only after the 90-tick cooldown");
+
+            // Air dash keeps the altitude: the window covers snapshots 10 and 15, so both must show
+            // the height reached when the dash started — and nothing after it.
+            lines = Run(73, "{\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[],\"lanterns\":[]}",
+                "{\"frames\":[{\"tick\":0,\"move\":[0,1],\"jump\":true}," +
+                "{\"tick\":4,\"jump\":false}," +
+                "{\"tick\":5,\"dash\":true}]}",                            // mid-air dash
+                15, 5);
+            AssertEq(EventsNamed(lines, "dash").Count, 1, "air dash fires");
+            double y = 0, vy = 0;                                          // replay the flight step by step
+            for (int s = 0; s <= 9; s++)
+            {
+                if (s == 0) vy = 7.0;                                      // the jump kick, gravity still applies that step
+                if (s >= 5) vy = 0; else vy += -20.0 / 60.0;               // from the dash tick on, the vertical velocity is frozen
+                y += vy / 60.0;
+            }
+            AssertNear(Axis(SnapAt(lines, 10).Get("player").Get("pos"), 1), y, 1e-9, "altitude held during the air dash");
+            AssertNear(Axis(SnapAt(lines, 15).Get("player").Get("pos"), 1), y, 1e-9, "still held at the last window tick");
+        }
+
+        private static void T18_Pause()
+        {
+            string sc = "{\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[],\"lanterns\":[]}";
+            // Rising edges only, like every other button: press to pause, press again to resume.
+            List<JsonValue> lines = Run(81, sc,
+                "{\"frames\":[{\"tick\":0,\"move\":[0,1],\"pause\":true},{\"tick\":7,\"pause\":false},{\"tick\":8,\"pause\":true}]}",
+                15, 5);
+
+            List<JsonValue> pev = EventsNamed(lines, "paused");
+            List<JsonValue> rev = EventsNamed(lines, "resumed");
+            AssertEq(pev.Count, 1, "paused event fired once");
+            AssertEq(rev.Count, 1, "resumed event fired once");
+            AssertEq(pev[0].Get("tick").I, 1, "paused stamps the tick the step completes");
+            AssertEq(rev[0].Get("tick").I, 9, "resumed stamps the tick the step completes");
+
+            AssertEq(SnapAt(lines, 5).Get("state").Text(""), "paused", "snapshot state during the pause");
+            AssertEq(SnapAt(lines, 5).Get("sim_tick").I, 0, "sim clock frozen while the tick counter runs");
+            AssertEq(SnapAt(lines, 5).Get("tick").I, 5, "tick counter keeps advancing");
+            AssertNear(SnapAt(lines, 5).Get("time_left_s").Num(0), 300.0, 1e-9, "time left frozen during the pause");
+
+            AssertEq(SnapAt(lines, 15).Get("state").Text(""), "playing", "playing again after resume");
+            AssertEq(SnapAt(lines, 15).Get("sim_tick").I, 7, "seven steps ran after the resume (ticks 8..14)");
+            // The paused steps stop before the movement step, so only seven live steps moved Mây.
+            AssertNear(Axis(SnapAt(lines, 15).Get("player").Get("pos"), 2), 7 * 0.1, 1e-9, "movement only while unpaused");
+        }
+
+        private static void T19_ContractV11()
+        {
+            // The five new tuning keys, exactly as Ticket-02 spells them.
+            JsonValue t = Tuning.Standard().ToContractJson();
+            AssertNear(t.Get("dash_speed").Num(0), 14.0, 1e-9, "dash_speed");
+            AssertNear(t.Get("dash_duration_s").Num(0), 0.2, 1e-9, "dash_duration_s");
+            AssertNear(t.Get("dash_cooldown_s").Num(0), 1.5, 1e-9, "dash_cooldown_s");
+            AssertEq(t.Get("night2_duration_s").I, 330, "night2_duration_s");
+            AssertEq(t.Get("night3_duration_s").I, 360, "night3_duration_s");
+
+            // A scenario may set the new player counters; the snapshot reports them and the new fields.
+            string sc = "{\"player\":{\"pos\":[0,0,0],\"carried\":0,\"flames\":3,\"invuln_ticks\":30,\"dash_cd_ticks\":20,\"pulse_cd_ticks\":40,\"charm_ticks\":50}," +
+                "\"random_motes\":false,\"motes\":[[3,0,3]],\"random_shades\":false,\"shades\":[],\"lanterns\":[]," +
+                "\"drifters\":[{\"id\":\"D1\",\"pos\":[10,3,0]}],\"charms\":[{\"id\":\"C1\",\"pos\":[5,0,5]}]}";
+            List<JsonValue> lines = Run(91, sc, null, 1, 1);
+            JsonValue p = SnapAt(lines, 0).Get("player");
+            AssertEq(p.Get("invuln").I, 30, "invuln counter");
+            AssertNear(p.Get("dash_cd_s").Num(0), 0.333, 1e-9, "dash_cd_s prints seconds");
+            AssertNear(p.Get("pulse_cd_s").Num(0), 0.667, 1e-9, "pulse_cd_s prints seconds");
+            AssertNear(p.Get("charm_s").Num(0), 0.833, 1e-9, "charm_s prints seconds");
+            Assert(p.Has("vel") && p.Has("grounded"), "snapshot player carries vel and grounded");
+            AssertIds(SnapAt(lines, 0).Get("drifters"), "D1");
+            AssertIds(SnapAt(lines, 0).Get("charms"), "C1");
+            AssertEq(SnapAt(lines, 0).Get("night").I, 1, "night field");
+            Assert(B(SnapAt(lines, 0).Get("wind").Get("active")) == false, "no wind on Night 1");
+            AssertNear(SnapAt(lines, 0).Get("wind").Get("dir_deg").Num(-1), 0.0, 1e-9, "wind dir printed");
+
+            JsonValue m0 = SnapAt(lines, 0).Get("motes").Arr_[0];
+            AssertEq(T(m0.Get("kind")), "random", "motes carry kind random/dropped");
+            Assert(m0.Get("ttl_s") == null || m0.Get("ttl_s").Type.ToString() == "Null", "no ttl on a random mote");
+            JsonValue c0 = SnapAt(lines, 0).Get("charms").Arr_[0];
+            Assert(B(c0.Get("available")), "charm starts available");
+
+            // Malformed v1.1 fields go down the exit-2 path.
+            ThrowsFormat(() => Loader.ScenarioFromJson("{\"charms\":[{\"id\":\"C1\",\"pos\":[0,0,0],\"available\":\"yes\"}]}"), "charm available");
+            ThrowsFormat(() => Loader.ScenarioFromJson("{\"player\":{\"charm_ticks\":-5}}"), "negative charm_ticks");
+            ThrowsFormat(() => Loader.ScenarioFromJson("{\"player\":{\"invuln_ticks\":1.5}}"), "fractional invuln_ticks");
+            ThrowsFormat(() => Loader.ScenarioFromJson("{\"shades\":[{\"pos\":[0,1,0],\"state\":\"fly\"}]}"), "unknown shade state");
+            ThrowsFormat(() => Loader.ScenarioFromJson("{\"drifters\":{}}"), "drifters must be an array");
+            ThrowsFormat(() => Loader.InputsFromJson("{\"frames\":[{\"tick\":0,\"dash\":\"yes\"}]}", 1), "dash button");
+            ThrowsFormat(() => Loader.InputsFromJson("{\"frames\":[{\"tick\":0,\"pause\":\"yes\"}]}", 1), "pause button");
         }
     }
 }
