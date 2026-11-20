@@ -1,0 +1,2 @@
+# This file tells Unity Hub which editor version opens this project.
+m_EditorVersion: 2022.3.1f1
