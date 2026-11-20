@@ -74,6 +74,7 @@ namespace DaoDenLong.Core
         public int DashDurationTicks = 12;
         public int DashCooldownTicks = 90;
         public double CharmRunSpeed = 7.2;        // Bùa Gió: run speed while it lasts
+        public double StepUpMax = 0.15;           // most a foot may rise per tick: tier edges are walls, ramps are not
         public int CharmDurationTicks = 600;      // refreshed by a re-pickup
         public int CharmRespawnTicks = 2700;      // the charm reappears at its own spot
         public double WindPushSpeed = 2.0;        // Night 3: a gust pushes Mây for 5 s every 30 s
@@ -329,6 +330,11 @@ namespace DaoDenLong.Core
         public bool Paused;
         public List<Drifter> Drifters = new List<Drifter>();
         public List<Charm> Charms = new List<Charm>();
+        public List<Zone> Zones = new List<Zone>();      // the walkable ground of the Night's map
+        public List<Pad> Pads = new List<Pad>();
+        private List<V3> _motePoints = new List<V3>();
+        private List<V3> _shadePoints = new List<V3>();
+        private int _drifterSeq, _gustIndex;
         private bool _prevPause, _prevDash;
         private bool _randomDrifters = true, _windEnabled;        private string _overReason;
         private bool _randomMotes = true, _randomShades = true;
@@ -341,42 +347,168 @@ namespace DaoDenLong.Core
         public string OverReason { get { return _overReason; } }
 
         /// <summary>Build the Night from scratch for the given seed. No score, no events.</summary>
-        public void Build(int seed)
+        public void Build(int seed) { Build(seed, 1); }
+
+        /// <summary>Build one of the three standard Nights from scratch. No score, no events.</summary>
+        public void Build(int seed, int night)
         {
+            if (night < 1 || night > 3)
+                throw new ArgumentOutOfRangeException("night", "night must be 1, 2 or 3");
+
             T = Tuning.Standard();
             Rng = new Rng((ulong)seed);
             Player = new Player { Flames = T.Flames, Grounded = true };
             Motes.Clear(); Shades.Clear(); Lanterns.Clear();
+            Zones.Clear(); Pads.Clear(); Drifters.Clear(); Charms.Clear();
             Tick = 0; SimTick = 0; Score = 0; State = "playing"; CamYawDeg = 0;
             _over = false; _bonusApplied = false; _overReason = null;
             _nextShadeIndex = 0; _nextMoteIndex = 0;
             _randomMotes = true; _randomShades = true;
             _prevJump = false; _prevInteract = false; _prevPulse = false;
-            Night = 1; WindActive = false; WindDirDeg = 0; Paused = false;
+            Night = night; WindActive = false; WindDirDeg = 0; Paused = false;
             _prevPause = false; _prevDash = false;
-            _randomDrifters = true; _windEnabled = false;
-            Drifters.Clear(); Charms.Clear();
-            DurationS = T.Night1DurationS;
+            _randomDrifters = true; _windEnabled = (night == 3);   // the standard: only Đảo Chuông has wind
+            _drifterSeq = 0; _gustIndex = 0;
+            _motePoints = NightMotePoints(night);
+            _shadePoints = NightShadePoints(night);
+            DurationS = NightDurationS(night);
+            BuildGeometry(night);
 
-            // Five big lanterns: L1 straight ahead on +Z, the rest on a pentagon of radius 25 m.
-            Lanterns.Add(NewLantern("L1", new V3(0, 0, 25)));
-            Lanterns.Add(NewLantern("L2", new V3(23.8, 0, 7.7)));
-            Lanterns.Add(NewLantern("L3", new V3(14.7, 0, -20.2)));
-            Lanterns.Add(NewLantern("L4", new V3(-14.7, 0, -20.2)));
-            Lanterns.Add(NewLantern("L5", new V3(-23.8, 0, 7.7)));
-
-            // Mote points: eight on a 12 m circle (every 45°), sixteen on a 33 m circle (every 22.5°).
-            // Which points are filled at the start is the seeded part of the run.
-            List<V3> points = MoteSpawnPoints();
+            // Which points are filled at the start is the seeded part of the run, so it is the first
+            // thing that touches the RNG. The list order is the standard's own.
             List<int> order = new List<int>();
-            for (int i = 0; i < points.Count; i++) order.Add(i);
+            for (int i = 0; i < _motePoints.Count; i++) order.Add(i);
             Shuffle(order);
-            for (int i = 0; i < Math.Min(T.StartMotes, points.Count); i++)
-                Motes.Add(NewMote(points[order[i]]));
+            for (int i = 0; i < Math.Min(T.StartMotes, _motePoints.Count); i++)
+                Motes.Add(NewMote(_motePoints[order[i]]));
 
             // No shades at the start: the first two arrive on the spawn schedule at tick 300, and the
             // ids S1, S2, ... follow the order they are born in, as the standard asks.
         }
+
+        private double NightDurationS(int night)
+        {
+            if (night == 2) return T.Night2DurationS;
+            if (night == 3) return T.Night3DurationS;
+            return T.Night1DurationS;
+        }
+
+        private int ShadeEveryForNight()
+        {
+            if (Night == 2) return T.ShadeEveryNight2;
+            if (Night == 3) return T.ShadeEveryNight3;
+            return T.ShadeSpawnEvery;
+        }
+
+        private int ShadeMaxForNight()
+        {
+            if (Night == 2) return T.ShadeMaxNight2;
+            if (Night == 3) return T.ShadeMaxNight3;
+            return T.ShadeMax;
+        }
+
+        private double ShadeSpeedForNight() { return Night == 3 ? T.ShadeSpeedNight3 : T.ShadeSpeed; }
+
+        private static V3 Polar(double cx, double cz, double r, double deg, double y)
+        {
+            double a = deg * Math.PI / 180.0;
+            return new V3(cx + r * Math.Cos(a), y, cz + r * Math.Sin(a));
+        }
+
+        private List<V3> NightMotePoints(int night)
+        {
+            List<V3> pts = new List<V3>();
+            if (night == 1) return MoteSpawnPoints();          // 8 points r12 (45°), 16 points r33 (22.5°)
+            if (night == 2)
+            {
+                V3[] centres = { new V3(0, 0, 0), new V3(70, 0, 0) };
+                foreach (V3 c in centres)
+                {
+                    for (int i = 0; i < 4; i++) pts.Add(Polar(c.X, c.Z, 10.0, i * 90.0, 0));
+                    for (int i = 0; i < 8; i++) pts.Add(Polar(c.X, c.Z, 22.0, i * 45.0, 0));
+                }
+                return pts;
+            }
+            // Night 3: three tiers, so the points carry the height of the tier they sit on.
+            for (int i = 0; i < 18; i++) pts.Add(Polar(0, 0, 34.0, i * 20.0, 0));        // tier 0
+            for (int i = 0; i < 8; i++) pts.Add(Polar(0, 0, 18.0, 20.0 + i * 20.0, 3));  // tier 1
+            for (int i = 0; i < 4; i++) pts.Add(Polar(0, 0, 5.0, 45.0 + i * 90.0, 6));   // tier 2
+            return pts;
+        }
+
+        private List<V3> NightShadePoints(int night)
+        {
+            List<V3> pts = new List<V3>();
+            if (night == 1) return ShadeSpawnPoints();         // 12 points r37, 15° + 30k
+            if (night == 2)
+            {
+                V3[] centres = { new V3(0, 0, 0), new V3(70, 0, 0) };
+                foreach (V3 c in centres)
+                    for (int i = 0; i < 8; i++) pts.Add(Polar(c.X, c.Z, 26.0, 22.5 + i * 45.0, 0));
+                return pts;
+            }
+            for (int i = 0; i < 16; i++) pts.Add(Polar(0, 0, 43.0, i * 22.5, 0));        // tier 0 ring
+            return pts;
+        }
+
+        /// <summary>The standard map of the Night: walkable ground, jump pads, lanterns and charms.</summary>
+        private void BuildGeometry(int night)
+        {
+            if (night == 1)
+            {
+                Zones.Add(new Zone { Kind = ZoneKind.Disc, Cx = 0, Cz = 0, R = 40.0, Y = 0 });
+                Lanterns.Add(NewLantern("L1", new V3(0, 0, 25)));
+                Lanterns.Add(NewLantern("L2", new V3(23.8, 0, 7.7)));
+                Lanterns.Add(NewLantern("L3", new V3(14.7, 0, -20.2)));
+                Lanterns.Add(NewLantern("L4", new V3(-14.7, 0, -20.2)));
+                Lanterns.Add(NewLantern("L5", new V3(-23.8, 0, 7.7)));
+                return;
+            }
+            if (night == 2)
+            {
+                Zones.Add(new Zone { Kind = ZoneKind.Disc, Cx = 0, Cz = 0, R = 28.0, Y = 0 });
+                Zones.Add(new Zone { Kind = ZoneKind.Disc, Cx = 70, Cz = 0, R = 28.0, Y = 0 });
+                Zones.Add(new Zone { Kind = ZoneKind.Rect, X0 = 26, X1 = 44, Z0 = -2, Z1 = 2, Y = 0 });
+                // Bục nhảy: 14 m/s up and 24 m/s horizontal toward the other island's centre.
+                Pads.Add(new Pad { Center = new V3(20, 0, 18), GroundY = 0, Vel = PadVel(20, 18, 70, 0, 14.0, 24.0) });
+                Pads.Add(new Pad { Center = new V3(50, 0, -18), GroundY = 0, Vel = PadVel(50, -18, 0, 0, 14.0, 24.0) });
+                Lanterns.Add(NewLantern("L1", new V3(0, 0, 20)));
+                Lanterns.Add(NewLantern("L2", new V3(17, 0, -10)));
+                Lanterns.Add(NewLantern("L3", new V3(-17, 0, -10)));
+                Lanterns.Add(NewLantern("L4", new V3(70, 0, 20)));
+                Lanterns.Add(NewLantern("L5", new V3(87, 0, -10)));
+                Lanterns.Add(NewLantern("L6", new V3(53, 0, -10)));
+                Charms.Add(new Charm { Id = "C1", Pos = new V3(35, 0, 0) });
+                return;
+            }
+            // Night 3: three tiers, straight ramps, the bell tower that cannot be climbed.
+            Zones.Add(new Zone { Kind = ZoneKind.Disc, Cx = 0, Cz = 0, R = 45.0, Y = 0 });
+            Zones.Add(new Zone { Kind = ZoneKind.Annulus, Cx = 0, Cz = 0, InnerR = 12.0, R = 24.0, Y = 3, ZPositive = true });
+            Zones.Add(new Zone { Kind = ZoneKind.Disc, Cx = 0, Cz = 0, R = 8.0, Y = 6 });
+            Zones.Add(new Zone { Kind = ZoneKind.Ramp, Cx = 0, Cz = 0, AngleDeg = 30, RFoot = 30.0, RTop = 24.0, HalfWidth = 1.5, YFoot = 0, YTop = 3 });
+            Zones.Add(new Zone { Kind = ZoneKind.Ramp, Cx = 0, Cz = 0, AngleDeg = 150, RFoot = 30.0, RTop = 24.0, HalfWidth = 1.5, YFoot = 0, YTop = 3 });
+            Zones.Add(new Zone { Kind = ZoneKind.Blocker, Cx = 0, Cz = 0, R = 2.0, BlockY = 6 });   // Tháp chuông
+            Pads.Add(new Pad { Center = new V3(0, 3, 13), GroundY = 3, Vel = new V3(0, 12, -8) });
+            Lanterns.Add(NewLantern("L1", new V3(0, 6, 6)));
+            Lanterns.Add(NewLantern("L2", new V3(18, 3, 10)));
+            Lanterns.Add(NewLantern("L3", new V3(-18, 3, 10)));
+            Lanterns.Add(NewLantern("L4", new V3(35, 0, -10)));
+            Lanterns.Add(NewLantern("L5", new V3(-35, 0, -10)));
+            Lanterns.Add(NewLantern("L6", new V3(20, 0, -35)));
+            Lanterns.Add(NewLantern("L7", new V3(-20, 0, -35)));
+            Charms.Add(new Charm { Id = "C1", Pos = new V3(30, 0, 25) });
+            Charms.Add(new Charm { Id = "C2", Pos = new V3(-30, 0, 25) });
+        }
+
+        private static V3 PadVel(double px, double pz, double tx, double tz, double vy, double horiz)
+        {
+            double dx = tx - px, dz = tz - pz;
+            double l = Math.Sqrt(dx * dx + dz * dz);
+            return new V3(horiz * dx / l, vy, horiz * dz / l);
+        }
+
+        /// <summary>The point Mây starts a Night on, and the fall respawn point (assumption, see docs/notes).</summary>
+        public V3 StartPoint { get { return Night == 2 ? new V3(0, 0, 0) : new V3(0, 0, 0); } }
 
         public static List<V3> MoteSpawnPoints()
         {
@@ -540,15 +672,18 @@ namespace DaoDenLong.Core
             _prevDash = input.Dash;
 
             // The order Ticket-02 pins down, adopted in Phase 1 so later phases add nothing to it.
-            DecrementCounters();      // 2. timers
-            MovePlayer(input, fireJump, fireDash);   // 3. movement and jump, then the fall check
+            DecrementCounters();      // 2. timers (including the charm respawn)
+            MovePlayer(input, fireJump, fireDash);   // 3. movement, jump, pads...
+            if (Player.FallWaitTicks == 0) WindPush();   // ...and the wind, then the fall check
             if (T.FallEnabled) CheckFall();
-            Pickups();                // 4. motes
+            Pickups();                // 4. motes and charms
             Interact(fireInteract);   // 5. lanterns
             SafeZones();              // 6. the safe radius
             Pulse(firePulse);         // 7. Tỏa Sáng
-            MoveShades();             // 8. shades
-            Contacts();               // 9. contacts
+            MoveShades();             // 8. shades and drifters
+            MoveDrifters();
+            DrifterContacts();        // 9. contacts: the drifters steal first...
+            Contacts();               //    ...then the shades hit, by ascending id
             Spawns();                 // 10. scheduled spawns
             CheckEnd();               // 11. win and lose
         }
@@ -596,6 +731,18 @@ namespace DaoDenLong.Core
                     if (m.TtlTicks <= 0) Motes.RemoveAt(i);
                 }
             }
+            // Bùa Gió: a taken charm counts its way back and reappears at its own spot (step 2's
+            // "hồi bùa"). Like every new entity it can be picked up from the tick after it returns.
+            foreach (Charm c in Charms)
+            {
+                if (c.Available || c.RespawnTicks <= 0) continue;
+                c.RespawnTicks--;
+                if (c.RespawnTicks == 0)
+                {
+                    c.Available = true;
+                    c.SpawnTick = (int)SimTick;
+                }
+            }
         }
 
         private void MovePlayer(InputFrame input, bool jump, bool dash)
@@ -629,6 +776,10 @@ namespace DaoDenLong.Core
             double vx = wx * sp, vz = wz * sp;
             double vy = Player.Vel.Y;
 
+            // A jump pad owns the velocity until the next landing: the movement keys do not
+            // override the launch, but a dash window does (the dash branch above already won).
+            if (Player.Launched && !dashing) { vx = Player.LaunchVel.X; vz = Player.LaunchVel.Z; }
+
             if (dashing && !jump) vy = 0;             // an air dash keeps the altitude
             else
             {
@@ -636,29 +787,96 @@ namespace DaoDenLong.Core
                 if (!Player.Grounded || jump) vy += T.Gravity / TicksPerSecond;
             }
 
+            double feetNow = Player.Pos.Y;
+
             V3 np = new V3(Player.Pos.X + vx / TicksPerSecond,
                            Player.Pos.Y + vy / TicksPerSecond,
                            Player.Pos.Z + vz / TicksPerSecond);
 
-            if (OnIsland(np))
+            // The ground a foot may stand on at the new point: the highest surface no higher than the
+            // step-up window, NaN over the cloud sea, NegativeInfinity behind a wall (the bell tower).
+            double g = GroundAt(np.X, np.Z, feetNow + T.StepUpMax);
+            if (g == double.NegativeInfinity && Player.Grounded)
             {
-                if (np.Y <= 0.0)
-                {
-                    np = new V3(np.X, 0, np.Z);
-                    vy = 0;
-                    Player.Grounded = true;
-                }
-                else Player.Grounded = false;
+                // The tower body: the walker is stopped where it is (the air path passes above it).
             }
-            else Player.Grounded = false;      // over the cloud sea: gravity keeps pulling
+            else if (!double.IsNaN(g) && np.Y <= g + 1e-9)
+            {
+                // The path touched down on a surface: land on it, feet first.
+                np = new V3(np.X, g, np.Z);
+                vy = 0;
+                Player.Grounded = true;
+                Player.Launched = false;
+            }
+            else Player.Grounded = false;      // mid-air, or over the cloud sea: gravity keeps pulling
 
             Player.Pos = np;
             Player.Vel = new V3(vx, vy, vz);
             if (len > 1e-12) Player.FacingDeg = Math.Atan2(wz, wx) * 180.0 / Math.PI;
             if (dashing) Player.DashTicksLeft--;   // the window counts down over the ticks it runs
+
+            if (Player.Grounded) CheckPads();      // a foot touching a pad is launched for the next tick
         }
 
-        private bool OnIsland(V3 p) { return Math.Sqrt(p.X * p.X + p.Z * p.Z) <= T.IslandRadius; }
+        /// <summary>
+        /// The height a foot standing at (x, z) may rest on, given the highest surface it may reach
+        /// (reach = current foot height + step-up window). NaN = no floor at all, NegativeInfinity =
+        /// the point is inside a body you cannot climb (checked only at its own level, so you may
+        /// walk under the bell tower from the tier below).
+        /// </summary>
+        private double GroundAt(double x, double z, double reach)
+        {
+            double best = double.NaN;
+            foreach (Zone zone in Zones)
+            {
+                if (!zone.Contains(x, z)) continue;
+                double h = zone.HeightAt(x, z);
+                if (zone.Kind == ZoneKind.Blocker)
+                {
+                    // A blocker only blocks at the level it stands on; it is never a floor.
+                    if (Math.Abs(reach - T.StepUpMax - zone.BlockY) <= 1e-9) return double.NegativeInfinity;
+                    continue;
+                }
+                if (h > reach + 1e-9) continue;                   // that floor is above the reach: you walk under it
+                if (double.IsNaN(best) || h > best) best = h;
+            }
+            return best;
+        }
+
+        private void CheckPads()
+        {
+            foreach (Pad pad in Pads)
+            {
+                if (V3.DistXZ(Player.Pos, pad.Center) > pad.Radius + 1e-9) continue;
+                if (Math.Abs(Player.Pos.Y - pad.GroundY) > 1e-9) continue;
+                Player.LaunchVel = pad.Vel;
+                Player.Vel = pad.Vel;              // kept, unchanged, until the next landing
+                Player.Launched = true;
+                break;
+            }
+        }
+
+        /// <summary>Night 3 wind: a gust every 30 s, 5 s long, random direction, pushing Mây 2 m/s.</summary>
+        private void WindPush()
+        {
+            if (_windEnabled && SimTick > 0 && SimTick % T.WindGustEveryTicks <= T.WindGustTicks && SimTick % T.WindGustEveryTicks != 0)
+            {
+                int gust = (int)((SimTick - 1) / T.WindGustEveryTicks);
+                if (gust != _gustIndex)
+                {
+                    _gustIndex = gust;
+                    WindDirDeg = Rng.NextDouble() * 360.0;      // the direction is drawn once, at the gust start
+                }
+                WindActive = true;
+            }
+            else WindActive = false;
+            if (!WindActive) return;
+            double a = WindDirDeg * Math.PI / 180.0;
+            // The push moves the body, on the ground and in the air alike (assumption, see docs/notes).
+            Player.Pos = new V3(Player.Pos.X + Math.Cos(a) * T.WindPushSpeed / TicksPerSecond,
+                                Player.Pos.Y,
+                                Player.Pos.Z + Math.Sin(a) * T.WindPushSpeed / TicksPerSecond);
+        }
 
         private void CheckFall()
         {
@@ -673,7 +891,8 @@ namespace DaoDenLong.Core
             Raise(new SimEvent(Tick, "player_hit")
                 .Put("by", JsonValue.Str("fall"))
                 .Put("flames", JsonValue.Int(Player.Flames))
-                .Put("dropped", JsonValue.Int(0)));
+                .Put("dropped", JsonValue.Int(0))
+                .Put("lost", JsonValue.Int(lost)));
             if (Player.Flames <= 0) { End(false, "no_flames"); return; }   // lose at once, no respawn
             _lastFallLost = lost;   // kept for the Phase 2 event field; Phase 1 output stays as specced
             Player.FallWaitTicks = T.FallWaitTicks;
@@ -696,13 +915,27 @@ namespace DaoDenLong.Core
             if (Player.Carried >= T.CarryCapacity) return;
             foreach (Mote m in SortedMotes())
             {
-                if (m.SpawnTick == Tick) continue;
+                if (m.SpawnTick == SimTick) continue;
                 if (V3.DistXZ(Player.Pos, m.Pos) > T.PickupRadius) continue;
                 if (Math.Abs(Player.Pos.Y - m.Pos.Y) > T.PickupHeight) continue;
                 Motes.Remove(m);
                 Player.Carried++;
                 Raise(new SimEvent(Tick, "mote_picked").Put("carried", JsonValue.Int(Player.Carried)));
                 if (Player.Carried >= T.CarryCapacity) break;
+            }
+
+            // Bùa Gió: picked up by the same rules as a mote, id order, from the tick after it appears.
+            foreach (Charm c in SortedCharms())
+            {
+                if (!c.Available || c.SpawnTick == SimTick) continue;
+                if (V3.DistXZ(Player.Pos, c.Pos) > T.PickupRadius) continue;
+                if (Math.Abs(Player.Pos.Y - c.Pos.Y) > T.PickupHeight) continue;
+                Player.CharmTicksLeft = T.CharmDurationTicks;   // a re-pickup refreshes the same window
+                c.Available = false;
+                c.RespawnTicks = T.CharmRespawnTicks;
+                Raise(new SimEvent(Tick, "charm_picked")
+                    .Put("charm_id", JsonValue.Str(c.Id))
+                    .Put("charm_ticks", JsonValue.Int(Player.CharmTicksLeft)));
             }
         }
 
@@ -740,7 +973,7 @@ namespace DaoDenLong.Core
         {
             foreach (Shade s in SortedShades())
             {
-                if (s.SpawnTick == Tick) continue;
+                if (s.SpawnTick == SimTick) continue;
                 if (s.State == ShadeState.stunned) continue;
                 if (s.PushTicksLeft > 0) continue;    // a push already on its way keeps its own pace to the edge
                 foreach (Lantern l in Lanterns)
@@ -771,7 +1004,7 @@ namespace DaoDenLong.Core
             JsonValue ids = JsonValue.Arr();
             foreach (Shade s in SortedShades())
             {
-                if (s.SpawnTick == Tick) continue;
+                if (s.SpawnTick == SimTick) continue;
                 if (V3.Dist(centre, s.Pos) > T.PulseRadius) continue;    // 3D distance to the shade centre
                 s.State = ShadeState.stunned;
                 s.StateTicksLeft = T.PulseStunTicks;
@@ -784,13 +1017,46 @@ namespace DaoDenLong.Core
                 ids.Add(JsonValue.Str(s.Id));
             }
             Raise(new SimEvent(Tick, "pulse").Put("stunned_ids", ids));
+
+            // Tỏa Sáng meets the drifters after the shades: a chasing one flees without stealing; a
+            // fleeing one that carries loot drops every mote it took, right here, and is gone after
+            // 120 ticks. Nothing about a drifter costs a flame.
+            foreach (Drifter d in SortedDrifters())
+            {
+                if (d.SpawnTick == SimTick || d.State == "removed") continue;
+                if (V3.Dist(centre, d.Pos) > T.PulseRadius) continue;
+                if (d.State == "chase") d.State = "flee";
+                else if (d.State == "flee" && d.Stolen > 0)
+                {
+                    int dropped = d.Stolen;
+                    d.Stolen = 0;
+                    d.RemovalTicksLeft = T.DrifterDropVanishTicks;
+                    for (int i = 0; i < dropped; i++)
+                    {
+                        Mote m = new Mote
+                        {
+                            Id = "M" + (++_nextMoteIndex).ToString(CultureInfo.InvariantCulture),
+                            Pos = new V3(d.Pos.X, 0, d.Pos.Z),
+                            Dropped = true,
+                            TtlTicks = T.DroppedMoteTtlTicks,
+                            SpawnTick = (int)SimTick
+                        };
+                        double g = GroundAt(m.Pos.X, m.Pos.Z, d.Pos.Y - 1.0 + 1e-9);
+                        m.Pos = new V3(m.Pos.X, double.IsNaN(g) ? m.Pos.Y : g, m.Pos.Z);
+                        Motes.Add(m);
+                    }
+                    Raise(new SimEvent(Tick, "drifter_drop")
+                        .Put("drifter_id", JsonValue.Str(d.Id))
+                        .Put("amount", JsonValue.Int(dropped)));
+                }
+            }
         }
 
         private void MoveShades()
         {
             foreach (Shade s in SortedShades())
             {
-                if (s.SpawnTick == Tick) continue;
+                if (s.SpawnTick == SimTick) continue;
 
                 if (s.PushTicksLeft > 0 && s.PushLeft > 1e-12)
                 {
@@ -810,7 +1076,8 @@ namespace DaoDenLong.Core
                 }
                 else if (s.State == ShadeState.wander && d <= T.DetectRange) s.State = ShadeState.chase;
 
-                double speed = s.State == ShadeState.chase ? T.ShadeSpeed : T.ShadeSpeed * 0.5;
+                double baseSpeed = ShadeSpeedForNight();
+                double speed = s.State == ShadeState.chase ? baseSpeed : baseSpeed * 0.5;
                 V3 dir = s.State == ShadeState.chase ? DirTo(s.Pos, Player.Pos) : WanderDir(s);
                 V3 next = new V3(s.Pos.X + dir.X * speed / TicksPerSecond, s.Pos.Y, s.Pos.Z + dir.Z * speed / TicksPerSecond);
 
@@ -835,12 +1102,88 @@ namespace DaoDenLong.Core
             return new V3(Math.Cos(a), 0, Math.Sin(a));
         }
 
+        // ---- Gió Lạc (v1.1, Nights 2-3). The body hovers 1 m over the ground under it; the contact
+        // rules are XZ-only, so the hover height never changes an outcome (assumption, docs/notes).
+
+        private void MoveDrifters()
+        {
+            for (int i = Drifters.Count - 1; i >= 0; i--)
+            {
+                Drifter d = Drifters[i];
+                if (d.SpawnTick == SimTick) continue;     // a new entity acts from the next tick
+                if (d.State == "removed") continue;       // frozen: it stays in the list as it left the play
+
+                if (d.RemovalTicksLeft > 0)
+                {
+                    d.RemovalTicksLeft--;                 // the freed drifter vanishes 120 ticks after the drop
+                    if (d.RemovalTicksLeft == 0) Drifters.RemoveAt(i);
+                    continue;
+                }
+
+                double d2p = V3.DistXZ(d.Pos, Player.Pos);
+                if (d.State == "idle" && Player.Carried >= T.DrifterChaseMinCarried && d2p <= T.DrifterChaseRange)
+                    d.State = "chase";                    // checked every tick, as the standard asks
+                else if (d.State == "chase" && (Player.Carried < T.DrifterChaseMinCarried || d2p > T.DrifterChaseRange))
+                    d.State = "idle";                     // the condition is gone: back to a slow glide
+
+                double speed = 0, dx = 0, dz = 0;
+                if (d.State == "chase") { speed = T.DrifterFlySpeed; V3 dir = DirTo(d.Pos, Player.Pos); dx = dir.X; dz = dir.Z; }
+                else if (d.State == "idle")
+                {
+                    speed = T.DrifterIdleSpeed;
+                    if (d2p > 1e-12) { V3 dir = DirTo(d.Pos, Player.Pos); dx = dir.X; dz = dir.Z; }   // a calm glide after Mây
+                }
+                else if (d.State == "flee")
+                {
+                    speed = T.DrifterFlySpeed;
+                    V3 dir = DirTo(Player.Pos, d.Pos);    // straight away from Mây, recomputed each tick
+                    dx = dir.X; dz = dir.Z;
+                    d.FleeTicksLeft--;
+                    if (d.FleeTicksLeft <= 0)
+                    {
+                        d.State = "removed";              // vanishes with what it carries (assumption)
+                        continue;
+                    }
+                }
+
+                if (speed > 0)
+                {
+                    double nx = d.Pos.X + dx * speed / TicksPerSecond;
+                    double nz = d.Pos.Z + dz * speed / TicksPerSecond;
+                    double g = GroundAt(nx, nz, d.Pos.Y - 1.0 + 1e-9);
+                    d.Pos = new V3(nx, (double.IsNaN(g) ? d.Pos.Y : g + 1.0), nz);
+                }
+            }
+        }
+
+        private void DrifterContacts()
+        {
+            if (Player.FallWaitTicks > 0) return;
+            foreach (Drifter d in SortedDrifters())
+            {
+                if (d.SpawnTick == SimTick || d.State == "removed") continue;
+                if (d.HasStolen) continue;                // each drifter steals at most once, ever
+                if (V3.DistXZ(d.Pos, Player.Pos) > T.DrifterStealRadius) continue;
+                // Mây's invulnerability does not stop a steal, and no flame is lost (the standard).
+                int amount = Math.Min(T.DrifterStealMax, Player.Carried);
+                Player.Carried -= amount;
+                d.Stolen += amount;
+                d.HasStolen = true;
+                d.State = "flee";
+                d.FleeTicksLeft = T.DrifterFleeTicks;
+                Raise(new SimEvent(Tick, "drifter_steal")
+                    .Put("drifter_id", JsonValue.Str(d.Id))
+                    .Put("amount", JsonValue.Int(amount))
+                    .Put("carried", JsonValue.Int(Player.Carried)));
+            }
+        }
+
         private void Contacts()
         {
             if (Player.FallWaitTicks > 0) return;
             foreach (Shade s in SortedShades())
             {
-                if (s.SpawnTick == Tick) continue;
+                if (s.SpawnTick == SimTick) continue;
                 if (s.State == ShadeState.stunned) continue;          // stunned shades deal no damage
                 if (s.NoDamageTicks > 0) continue;                    // being pushed out of the light
                 if (V3.DistXZ(s.Pos, Player.Pos) > T.ShadeHitRadius) continue;
@@ -878,16 +1221,16 @@ namespace DaoDenLong.Core
                 Pos = p,
                 Dropped = true,
                 TtlTicks = T.DroppedMoteTtlTicks,
-                SpawnTick = (int)Tick
+                SpawnTick = (int)SimTick
             });
         }
 
         private void Spawns()
         {
             // Motes: one extra mote at 240, 480, ... while the cap is not reached.
-            if (_randomMotes && Tick >= T.MoteSpawnStartTick && Tick % T.MoteSpawnEvery == 0 && Motes.Count < T.MoteCap)
+            if (_randomMotes && SimTick >= T.MoteSpawnStartTick && SimTick % T.MoteSpawnEvery == 0 && Motes.Count < T.MoteCap)
             {
-                List<V3> points = MoteSpawnPoints();
+                List<V3> points = _motePoints;
                 List<int> free = new List<int>();
                 for (int i = 0; i < points.Count; i++)
                 {
@@ -903,26 +1246,56 @@ namespace DaoDenLong.Core
                 }
             }
 
-            // Shades: two at tick 300, then one every 480 ticks while below the cap.
+            // Shades: two at tick 300, then one every interval while below the cap. The interval, the
+            // cap and the points are the Night's own (480/6, 420/8, 360/10).
             if (_randomShades)
             {
-                bool due = Tick == T.ShadeSpawnStartTick ||
-                           (Tick > T.ShadeSpawnStartTick && (Tick - T.ShadeSpawnStartTick) % T.ShadeSpawnEvery == 0);
+                int every = ShadeEveryForNight();
+                bool due = SimTick == T.ShadeSpawnStartTick ||
+                           (SimTick > T.ShadeSpawnStartTick && (SimTick - T.ShadeSpawnStartTick) % every == 0);
                 if (due)
                 {
-                    int wanted = Tick == T.ShadeSpawnStartTick ? 2 : 1;
+                    int wanted = SimTick == T.ShadeSpawnStartTick ? 2 : 1;
                     for (int i = 0; i < wanted; i++)
                     {
-                        if (Shades.Count >= T.ShadeMax) break;
-                        List<V3> points = ShadeSpawnPoints();
+                        if (Shades.Count >= ShadeMaxForNight()) break;
+                        List<V3> points = _shadePoints;
                         List<int> ok = new List<int>();
                         for (int p = 0; p < points.Count; p++)
                             if (V3.DistXZ(points[p], Player.Pos) >= T.ShadeSpawnMinPlayerDist) ok.Add(p);
                         if (ok.Count == 0) continue;                // no valid point left: skip this turn
                         Shade s = NewShade(points[ok[Rng.Next(ok.Count)]]);
-                        s.SpawnTick = (int)Tick;
+                        s.SpawnTick = (int)SimTick;
                         Shades.Add(s);
                         Raise(new SimEvent(Tick, "shade_spawned").Put("id", JsonValue.Str(s.Id)));
+                    }
+                }
+            }
+
+            // Gió Lạc: one drifter at tick 1200, 2400, ... while fewer than two are on the island,
+            // born on one of the Night's mist points at random (Nights 2-3 only, as the standard says).
+            if (Night >= 2 && _randomDrifters && SimTick >= T.DrifterSpawnStartTick && SimTick % T.DrifterSpawnEvery == 0)
+            {
+                int active = 0;
+                foreach (Drifter d in Drifters) if (d.State != "removed") active++;
+                if (active < T.DrifterMax)
+                {
+                    List<V3> points = _shadePoints;
+                    List<int> ok = new List<int>();
+                    for (int p = 0; p < points.Count; p++)
+                        if (V3.DistXZ(points[p], Player.Pos) >= T.ShadeSpawnMinPlayerDist) ok.Add(p);
+                    if (ok.Count > 0)
+                    {
+                        V3 p = points[ok[Rng.Next(ok.Count)]];
+                        Drifter d = new Drifter
+                        {
+                            Id = "D" + (++_drifterSeq).ToString(CultureInfo.InvariantCulture),
+                            Pos = new V3(p.X, 1.0, p.Z),
+                            State = "idle",
+                            SpawnTick = (int)SimTick
+                        };
+                        Drifters.Add(d);
+                        Raise(new SimEvent(Tick, "drifter_spawned").Put("id", JsonValue.Str(d.Id)));
                     }
                 }
             }

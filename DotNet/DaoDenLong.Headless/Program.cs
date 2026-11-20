@@ -71,7 +71,7 @@ namespace DaoDenLong.Headless
             }
 
             if (string.IsNullOrEmpty(outPath)) throw new FormatException("--out is required");
-            if (night != 1) throw new FormatException("Phase 1 ships Night 1 only (got --night " + night.ToString(CultureInfo.InvariantCulture) + ")");
+            if (night < 1 || night > 3) throw new FormatException("--night must be 1, 2 or 3 (got " + night.ToString(CultureInfo.InvariantCulture) + ")");
 
             Scenario scenario = null;
             if (!string.IsNullOrEmpty(scenarioFile))
@@ -81,7 +81,7 @@ namespace DaoDenLong.Headless
             if (!string.IsNullOrEmpty(inputsFile))
                 inputs = Loader.InputsFromJson(File.ReadAllText(Path.GetFullPath(inputsFile), Encoding.UTF8), (int)ticks);
 
-            List<JsonValue> lines = Engine.Run(seed, scenario, inputs, ticks, snapshotEvery);
+            List<JsonValue> lines = Engine.Run(seed, scenario, inputs, ticks, snapshotEvery, night);
 
             StringBuilder sb = new StringBuilder();
             foreach (JsonValue line in lines)

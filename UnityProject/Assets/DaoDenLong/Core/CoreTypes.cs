@@ -140,6 +140,73 @@ namespace DaoDenLong.Core
         public int SpawnTick;
     }
 
+    /// <summary>A jump pad (v1.1, Nights 2-3). A grounded body whose feet are on the pad's ground
+    /// level inside its radius is launched with Vel; the launch velocity is then kept, unchanged,
+    /// until the next landing (movement keys do not override it; a dash window does).</summary>
+    public sealed class Pad
+    {
+        public V3 Center;                 // pad centre, on its ground level
+        public double GroundY;            // the surface the launch fires from
+        public V3 Vel;                    // the launch velocity, kept unchanged until landing
+        public double Radius = 1.0;
+    }
+
+    public enum ZoneKind { Disc, Annulus, Rect, Ramp, Blocker }
+
+    /// <summary>One walkable piece of ground for the Phase 2 maps: islands, bridge, tiers, ramps.
+    /// Heights are exact. The player may climb at most Tuning.StepUpMax metres per tick, so tier
+    /// edges are walls and only the ramps lead up (assumptions: docs/notes/ASSUMPTIONS.md).</summary>
+    public sealed class Zone
+    {
+        public ZoneKind Kind;
+        public double Cx, Cz, R;                  // Disc / Annulus / Blocker: centre and radius
+        public double InnerR;                     // Annulus: inner radius
+        public bool ZPositive;                    // Annulus: only the z > 0 half (Night 3 tier 1)
+        public double X0, X1, Z0, Z1;             // Rect: the bridge deck
+        public double Y;                          // flat height of the surface
+        public double AngleDeg, RFoot, RTop, HalfWidth, YFoot, YTop;   // Ramp: a strip along a radius
+        public double BlockY;                     // Blocker: it only blocks a walker standing at this height
+
+        // Boundaries are exact double comparisons — no tolerance: Phase 1 pinned the rim step, and a
+        // tolerance would quietly move it (see T10). Simple and exact beats clever.
+        public bool Contains(double x, double z)
+        {
+            switch (Kind)
+            {
+                case ZoneKind.Disc:
+                    return Dist2(x - Cx, z - Cz) <= R * R;
+                case ZoneKind.Annulus:
+                    if (ZPositive && z <= 0.0) return false;
+                    double d = Dist2(x - Cx, z - Cz);
+                    return d >= InnerR * InnerR && d <= R * R;
+                case ZoneKind.Rect:
+                    return x >= X0 && x <= X1 && z >= Z0 && z <= Z1;
+                case ZoneKind.Ramp:
+                    double a = AngleDeg * Math.PI / 180.0;
+                    double along = (x - Cx) * Math.Cos(a) + (z - Cz) * Math.Sin(a);
+                    double perp = -(x - Cx) * Math.Sin(a) + (z - Cz) * Math.Cos(a);
+                    double lo = Math.Min(RFoot, RTop), hi = Math.Max(RFoot, RTop);
+                    return along >= lo && along <= hi && Math.Abs(perp) <= HalfWidth;
+                case ZoneKind.Blocker:
+                    return Dist2(x - Cx, z - Cz) <= R * R;
+            }
+            return false;
+        }
+
+        /// <summary>Surface height at a point the zone contains (the ramp slopes linearly).</summary>
+        public double HeightAt(double x, double z)
+        {
+            if (Kind != ZoneKind.Ramp) return Y;
+            double a = AngleDeg * Math.PI / 180.0;
+            double along = (x - Cx) * Math.Cos(a) + (z - Cz) * Math.Sin(a);
+            double t = (along - RFoot) / (RTop - RFoot);            // 0 at the foot, 1 at the top
+            if (t < 0.0) t = 0.0; else if (t > 1.0) t = 1.0;
+            return YFoot + (YTop - YFoot) * t;
+        }
+
+        private static double Dist2(double dx, double dz) { return dx * dx + dz * dz; }
+    }
+
     /// <summary>One fixed-tick input frame (Test Contract section C).</summary>
     public sealed class InputFrame
     {
