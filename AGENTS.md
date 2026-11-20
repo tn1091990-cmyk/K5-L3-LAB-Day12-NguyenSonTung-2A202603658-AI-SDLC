@@ -13,7 +13,7 @@ deterministic core is a pure-C# library shared by the Unity game and the headles
 - `UnityProject/Assets/DaoDenLong/Core/` — the deterministic simulation (pure C#, no UnityEngine,
   no `System.IO`, no NuGet). Both Unity and .NET compile these same files.
 - `DotNet/DaoDenLong.Headless/` — the Test Contract runner (JSONL, exit 0 / 2).
-- `DotNet/DaoDenLong.Tests/` — the self-made test suite (16 tests, exit = number of failures).
+- `DotNet/DaoDenLong.Tests/` — the self-made test suite (24 tests, exit = number of failures).
 - `game.contract.json` — the Test Contract declaration at the repo root.
 - `docs/notes/` — honest notes: assumptions, AI journal, retro. `docs/proof/` — per-phase evidence.
 
@@ -55,3 +55,7 @@ dotnet run --project DotNet/DaoDenLong.Headless -c Release -- --seed 42 --ticks 
    on purpose: no third-party art was needed at all.
 5. Simple over clever. The core uses only `double` math and its own deterministic RNG so the
    hidden tests get byte-identical results on any platform.
+6. Harness lesson (phase 2, repeat offenders): test tolerances must respect printed precision
+   (snapshot coords are 3 decimals — never assert tighter); input fields are sticky and
+   dash/pause are false→true edges; and Phase-1 pinned tests are frozen — when a new test
+   fails, first re-check the test's own reading of the spec.

@@ -38,8 +38,10 @@ dotnet build DotNet/DaoDenLong.Headless -c Release
 dotnet run --project DotNet/DaoDenLong.Tests
 ```
 
-16 self-made tests cover movement, pickup, deposit, pulse, safe zones, falls, spawns, win/lose
-order, input semantics, output shape and determinism (see [`docs/proof/phase-1/`](docs/proof/phase-1/)).
+24 self-made tests cover movement, pickup, deposit, pulse, safe zones, falls, spawns, win/lose
+order, input semantics, output shape, determinism, dash/pause, the Night 2/3 maps, jump pads,
+drifters, charms and wind (see [`docs/proof/phase-1/`](docs/proof/phase-1/) and
+[`docs/proof/phase-2/`](docs/proof/phase-2/)).
 The contract is declared in [`game.contract.json`](game.contract.json). Malformed inputs or scenario
 → exit code 2; identical seeds → byte-identical JSONL.
 

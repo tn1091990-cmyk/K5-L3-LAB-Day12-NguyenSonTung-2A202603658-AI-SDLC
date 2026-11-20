@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## [Phase 2] — 2026-11-21
+- Contract bumped to v1.1: dash (14 m/s × 0.2 s, 1.5 s cooldown) and pause/resume in the core,
+  new snapshot fields (`night`, `wind`, player `vel`/`invuln`/`dash_cd_s`/`pulse_cd_s`/`charm_s`,
+  mote `kind`/`ttl_s`, `drifters`, `charms`); tuning keys appended in published order.
+- Night 2 (two islands + bridge + jump pads) and Night 3 (three tiers + ramps + pad + bell tower
+  + wind gusts) built to the standard numbers; per-night mote/shade schedules and clocks.
+- New entities: Drifter "Gió Lạc" (steal/flee/pulse rules) and pickup charms (speed + dash-CD,
+  respawn cycle); new events `dash`, `paused`, `resumed`, `night_start`, `charm_picked`,
+  `drifter_steal`, `drifter_drop`; `player_hit` from a fall gains the `lost` field.
+- Test suite grown to 24 tests, all green, Phase-1 tests untouched — `docs/proof/phase-2/tests.txt`;
+  verification plan `docs/proof/phase-2/plan.md`.
+- Determinism re-checked on v1.1 output: two 18,000-tick runs byte-identical
+  (SHA-256 in `docs/proof/phase-2/determinism.md`); full 21,600-tick Night runs ≈ 1 s (budget 30 s).
+
 ## [Phase 1] — 2026-11-20
 - Deterministic core built as a pure-C# library (same files compile into both the Unity
   project and the .NET headless runner). Deterministic RNG, fixed 60 ticks/s, `double` math only.

@@ -1,0 +1,26 @@
+﻿PASS  T01 determinism: same seed+scenario+inputs byte-identical
+PASS  T02 tick model: snapshot 0 post-scenario, step k stamps k+1, no setup score
+PASS  T03 movement: 6 m/s, diagonal normalised, camera yaw, jump only from ground
+PASS  T04 pickup: XZ radius 1.0 m inclusive, height rule 1.5 m
+PASS  T05 capacity: 10 motes, pickup refused at cap
+PASS  T06 interact: radius 2.0 m, deposit memory, tie -> smaller id
+PASS  T07 pulse: cost 3, radius 5 m 3D, cooldown 3 s, stun+push, +5 per hit
+PASS  T08 shade hit: -1 flame, drop floor(carried/2) in ring, invuln 90, recoil
+PASS  T09 safe zone: shade inside pushed to 6 m edge within 30 ticks, no damage
+PASS  T10 fall off island: one penalty, motes lost, 60-tick wait, respawn
+PASS  T11 win/lose order: no_flames first, all_lit beats dawn, score formula
+PASS  T12 spawns: motes 240/480/720, two shades at 300, ids in birth order
+PASS  T13 input semantics: defaults, sticky fields, edges, strict tick order
+PASS  T14 malformed scenario/inputs are rejected (exit code 2 path)
+PASS  T15 output shape: JSONL lines, 3-decimal coords, early stop, end line last
+PASS  T16 snapshot ids in natural order (S1 < S2 < S10)
+PASS  T17 dash: 14 m/s x 12 ticks, cooldown 90 from the start, air dash keeps altitude
+PASS  T18 pause: tick advances, sim frozen, snapshot says paused, resume works
+PASS  T19 contract v1.1: new tuning keys, new snapshot fields, new format rejections
+PASS  T20 multi-night: per-night schedules, clocks, night_start line
+PASS  T21 jump pads: launch velocity kept until landing; keys do not override; dash does
+PASS  T22 drifters: steal once, flee 240, pulse-flee, pulse-drop, vanish
+PASS  T23 charm: pickup, 7.2 m/s, dash off cooldown, expiry, respawn cycle
+PASS  T24 wind (Night 3): gust windows, seeded direction, deterministic drift
+
+24/24 tests passed.
