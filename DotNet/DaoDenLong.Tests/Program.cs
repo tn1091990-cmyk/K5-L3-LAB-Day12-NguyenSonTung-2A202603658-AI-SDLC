@@ -46,6 +46,11 @@ namespace DaoDenLong.Tests
                 ("T17 dash: 14 m/s x 12 ticks, cooldown 90 from the start, air dash keeps altitude", T17_Dash),
                 ("T18 pause: tick advances, sim frozen, snapshot says paused, resume works", T18_Pause),
                 ("T19 contract v1.1: new tuning keys, new snapshot fields, new format rejections", T19_ContractV11),
+                ("T20 multi-night: per-night schedules, clocks, night_start line", T20_MultiNight),
+                ("T21 jump pads: launch velocity kept until landing; keys do not override; dash does", T21_JumpPads),
+                ("T22 drifters: steal once, flee 240, pulse-flee, pulse-drop, vanish", T22_Drifters),
+                ("T23 charm: pickup, 7.2 m/s, dash off cooldown, expiry, respawn cycle", T23_Charm),
+                ("T24 wind (Night 3): gust windows, seeded direction, deterministic drift", T24_Wind),
             };
 
             foreach (var (name, body) in tests)
@@ -66,11 +71,11 @@ namespace DaoDenLong.Tests
 
         // ---- harness ----------------------------------------------------------
 
-        private static List<JsonValue> Run(int seed, string scenarioJson, string inputsJson, long ticks, int snapshotEvery)
+        private static List<JsonValue> Run(int seed, string scenarioJson, string inputsJson, long ticks, int snapshotEvery, int night = 1)
         {
             Scenario scenario = Loader.ScenarioFromJson(scenarioJson ?? "{}");
             List<InputFrame> inputs = Loader.InputsFromJson(inputsJson ?? "{\"frames\":[]}", (int)ticks);
-            return Engine.Run(seed, scenario, inputs, ticks, snapshotEvery);
+            return Engine.Run(seed, scenario, inputs, ticks, snapshotEvery, night);
         }
 
         private static List<JsonValue> OfType(List<JsonValue> lines, string type)
@@ -84,6 +89,15 @@ namespace DaoDenLong.Tests
         {
             var r = new List<JsonValue>();
             foreach (JsonValue l in OfType(lines, "event")) if (T(l.Get("name")) == name) r.Add(l);
+            return r;
+        }
+
+        // Events that came from the simulation itself, i.e. everything except the runner's
+        // v1.1 night_start announcement (T02 pins "setup scores nothing, emits nothing").
+        private static List<JsonValue> SimEventsOf(List<JsonValue> lines)
+        {
+            var r = new List<JsonValue>();
+            foreach (JsonValue l in OfType(lines, "event")) if (T(l.Get("name")) != "night_start") r.Add(l);
             return r;
         }
 
@@ -176,7 +190,7 @@ namespace DaoDenLong.Tests
             AssertEq(s0.Get("player").Get("carried").I, 4, "scenario carried");
             AssertEq(s0.Get("motes_active").I, 1, "scenario motes replace the defaults");
             AssertEq(s0.Get("score").I, 0, "setup must not score");
-            AssertEq(OfType(lines, "event").Count, 0, "setup must not emit events");
+            AssertEq(SimEventsOf(lines).Count, 0, "setup must not emit simulation events (only the runner's night_start line)");
             // A pre-lit lantern earns no +100: one idle tick keeps the score at 0.
             AssertEq(SnapAt(lines, 1).Get("score").I, 0, "score after one idle tick");
 
@@ -611,7 +625,7 @@ namespace DaoDenLong.Tests
             // Well-formed documents run clean; empty ones use game defaults
             // (snapshot at tick 0, snapshot at tick 5, then the mandatory end line).
             List<JsonValue> lines = Engine.Run(1, Loader.ScenarioFromJson("{}"), Loader.InputsFromJson("{\"frames\":[]}", 5), 5, 5);
-            AssertEq(lines.Count, 3, "empty scenario + empty inputs is a valid run (2 snapshots + end)");
+            AssertEq(lines.Count, 4, "empty scenario + empty inputs is a valid run (night_start + 2 snapshots + end)");
         }
 
         private static void T15_OutputShape()
@@ -621,7 +635,10 @@ namespace DaoDenLong.Tests
 
             AssertEq(OfType(lines, "snapshot").Count, 4, "snapshots at 0, 10, 20, 30");
             AssertEq(OfType(lines, "end").Count, 1, "one end line");
-            AssertEq(lines[0].Serialize(), SnapAt(lines, 0).Serialize(), "the first line is the tick 0 snapshot");
+            AssertEq(OfType(lines, "event").Count, 1, "only the runner's night_start line is an event (v1.1: it precedes the tick 0 snapshot)");
+            AssertEq(T(OfType(lines, "event")[0].Get("name")), "night_start", "the one event is night_start");
+            AssertEq(OfType(lines, "event")[0].Get("data").Get("night").I, 1, "night_start names the Night");
+            AssertEq(lines[1].Serialize(), SnapAt(lines, 0).Serialize(), "the second line is the tick 0 snapshot");
             AssertEq(lines[lines.Count - 1].Serialize(), OfType(lines, "end")[0].Serialize(), "the last line is the end line");
 
             foreach (JsonValue l in lines)
@@ -805,6 +822,208 @@ namespace DaoDenLong.Tests
             ThrowsFormat(() => Loader.ScenarioFromJson("{\"drifters\":{}}"), "drifters must be an array");
             ThrowsFormat(() => Loader.InputsFromJson("{\"frames\":[{\"tick\":0,\"dash\":\"yes\"}]}", 1), "dash button");
             ThrowsFormat(() => Loader.InputsFromJson("{\"frames\":[{\"tick\":0,\"pause\":\"yes\"}]}", 1), "pause button");
+        }
+
+        // ---- Phase 2: multi-night, pads, drifters, charm, wind ------------------
+
+        private static void T20_MultiNight()
+        {
+            const string quiet = "{\"player\":{\"invuln_ticks\":4000},\"random_motes\":true,\"random_shades\":true,\"random_drifters\":true}";
+
+            // Night 2: 330 s clock, shade interval 420, drifters from tick 1200, charm on the bridge.
+            List<JsonValue> n2 = Run(21, quiet, null, 1210, 1210, 2);
+            List<JsonValue> n2ev = OfType(n2, "event");
+            AssertEq(T(n2ev[0].Get("name")), "night_start", "night_start leads the file");
+            AssertEq(n2ev[0].Get("data").Get("night").I, 2, "night 2 announced");
+            AssertNear(SnapAt(n2, 0).Get("time_left_s").Num(-1), 330.0, 1e-9, "night 2 clock");
+            AssertIds(SnapAt(n2, 0).Get("charms"), "C1");
+            AssertNear(Axis(SnapAt(n2, 0).Get("charms").Arr_[0].Get("pos"), 0), 35.0, 1e-9, "charm C1 sits on the bridge");
+            // Shade schedule to tick 1210: 300, 300, 720, 1140 — the 420-tick interval, no drift before it.
+            var n2sh = EventsNamed(n2, "shade_spawned");
+            AssertEq(n2sh.Count, 4, "night 2 shade schedule: 300, 300, 720, 1140");
+            AssertEq(n2sh[2].Get("tick").I, 720, "night 2 shade interval is 420 ticks");
+            AssertEq(n2sh[3].Get("tick").I, 1140, "and the next at 1140");
+            AssertEq(T(n2sh[2].Get("data").Get("id")), "S3", "ids follow birth order");
+            var n2dr = EventsNamed(n2, "drifter_spawned");
+            AssertEq(n2dr.Count, 1, "first drifter born at tick 1200");
+            AssertEq(n2dr[0].Get("tick").I, 1200, "drifter schedule 1200, 2400, ...");
+            AssertEq(EventsNamed(n2, "drifter_steal").Count, 0, "a drifter with empty hands does not chase or steal");
+
+            // Night 3: 360 s clock, shade interval 360, two charms, wind channel open.
+            List<JsonValue> n3 = Run(21, quiet, null, 1210, 1210, 3);
+            AssertEq(OfType(n3, "event")[0].Get("data").Get("night").I, 3, "night 3 announced");
+            AssertNear(SnapAt(n3, 0).Get("time_left_s").Num(-1), 360.0, 1e-9, "night 3 clock");
+            var n3sh = EventsNamed(n3, "shade_spawned");
+            AssertEq(n3sh.Count, 4, "night 3 shade schedule: 300, 300, 660, 1020");
+            AssertEq(n3sh[2].Get("tick").I, 660, "night 3 shade interval is 360 ticks");
+            AssertEq(EventsNamed(n3, "drifter_spawned").Count, 1, "drifters run on night 3 too");
+            AssertIds(SnapAt(n3, 0).Get("charms"), "C1", "C2");
+
+            // Night 1 is untouched: the 480-tick interval pinned in Phase 1 still holds.
+            List<JsonValue> n1 = Run(21, quiet, null, 900, 900, 1);
+            var n1sh = EventsNamed(n1, "shade_spawned");
+            AssertEq(n1sh.Count, 3, "night 1 schedule: 300, 300, 780");
+            AssertEq(n1sh[2].Get("tick").I, 780, "night 1 interval stays 480");
+            AssertEq(EventsNamed(n1, "drifter_spawned").Count, 0, "no drifters on night 1");
+
+            AssertEq(Serialize(Run(21, quiet, null, 1210, 1210, 3)), Serialize(Run(21, quiet, null, 1210, 1210, 3)), "per-night determinism holds");
+        }
+
+        private static void T21_JumpPads()
+        {
+            // Standing on the Night-2 pad at (20,0,18): the pad fires at the end of the tick,
+            // and the launch velocity (vy 14 + 24 m/s toward island B's centre) owns the flight
+            // until landing ~1.4 s later, on island B.
+            const string sc = "{\"player\":{\"pos\":[20,0,18]},\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[]}";
+            List<JsonValue> plain = Run(3, sc, null, 120, 120, 2);
+            JsonValue p = SnapAt(plain, 120).Get("player");
+            double bx = 70.0, bz = 0.0; // island B centre
+            double d = Math.Sqrt(Math.Pow(Axis(p.Get("pos"), 0) - bx, 2) + Math.Pow(Axis(p.Get("pos"), 2) - bz, 2));
+            Assert(B(p.Get("grounded")), "the flight ends with a landing well before tick 120");
+            AssertNear(Axis(p.Get("pos"), 1), 0.0, 1e-9, "landing on island B's sand, Y = 0");
+            Assert(d < 22.0, "landed on island B, not on the way");
+            // Analytic: dir (50,-18)/53.141, 24 m/s horizontal, ~1.4 s flight → (51.61, 6.62).
+            AssertNear(Axis(p.Get("pos"), 0), 51.61, 0.6, "heading toward island B's centre during flight");
+            AssertNear(Axis(p.Get("pos"), 2), 6.62, 0.6, "heading toward island B's centre during flight");
+
+            // Movement keys must NOT override the launch velocity mid-flight (dash still may).
+            // The zeroing frame at tick 90 (landed ~85) stops the sticky key from adding a walk afterwards.
+            List<JsonValue> steered = Run(3, sc, "{\"frames\":[{\"tick\":1,\"move\":[1,0]},{\"tick\":90,\"move\":[0,0]}]}", 120, 120, 2);
+            AssertNear(Axis(SnapAt(steered, 120).Get("player").Get("pos"), 0), Axis(p.Get("pos"), 0), 0.7, "held keys do not steer a pad launch");
+            AssertNear(Axis(SnapAt(steered, 120).Get("player").Get("pos"), 2), Axis(p.Get("pos"), 2), 0.7, "held keys do not steer a pad launch");
+
+            // A dash mid-flight is allowed and does change where you land (+Z from the start facing).
+            List<JsonValue> dashed = Run(3, sc, "{\"frames\":[{\"tick\":30,\"dash\":true}]}", 120, 120, 2);
+            AssertEq(EventsNamed(dashed, "dash").Count, 1, "dash fires during the flight");
+            Assert(Axis(SnapAt(dashed, 120).Get("player").Get("pos"), 2) > Axis(p.Get("pos"), 2) + 1.5, "the dash window pushes the landing down +Z");
+        }
+
+        private static void T22_Drifters()
+        {
+            // (a) chase → steal once → flee 240 ticks → gone. Carried 6 ≥ 5, drifter at 5 m.
+            string scA = "{\"player\":{\"pos\":[0,0,0],\"carried\":6},\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[],\"charms\":[]," +
+                "\"drifters\":[{\"id\":\"D1\",\"pos\":[0,0,5]}]}";
+            List<JsonValue> a = Run(5, scA, null, 320, 160, 2);
+            var steal = EventsNamed(a, "drifter_steal");
+            AssertEq(steal.Count, 1, "the drifter steals exactly once");
+            Assert(steal[0].Get("tick").I >= 25 && steal[0].Get("tick").I <= 45, "steal lands ~tick 33 (7 m/s closing from 5 m)");
+            AssertEq(T(steal[0].Get("data").Get("drifter_id")), "D1", "steal names its drifter");
+            AssertEq(steal[0].Get("data").Get("amount").I, 3, "steals min(3, carried)");
+            AssertEq(steal[0].Get("data").Get("carried").I, 3, "reports the player's carried after the steal");
+            var snapA = SnapAt(a, 160);
+            AssertEq(T(snapA.Get("drifters").Arr_[0].Get("state")), "flee", "fleeing after the steal");
+            AssertEq(snapA.Get("drifters").Arr_[0].Get("stolen").I, 3, "carries the loot in the snapshot");
+            JsonValue goneA = SnapAt(a, 320).Get("drifters");
+            AssertEq(goneA.Arr_.Count, 1, "the entry stays in the list, frozen, after vanishing");
+            AssertEq(T(goneA.Arr_[0].Get("state")), "removed", "gone from the world by tick 320 (240 flee ticks)");
+            AssertEq(goneA.Arr_[0].Get("stolen").I, 3, "the loot went with it");
+
+            // (b) pulse a chasing drifter → flee, no steal, no loot.
+            string scB = "{\"player\":{\"pos\":[0,0,0],\"carried\":8},\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[],\"charms\":[]," +
+                "\"drifters\":[{\"id\":\"D1\",\"pos\":[0,0,5]}]}";
+            List<JsonValue> b = Run(5, scB, "{\"frames\":[{\"tick\":10,\"pulse\":true}]}", 300, 300, 2);
+            AssertEq(EventsNamed(b, "drifter_steal").Count, 0, "a pulsed drifter flees without stealing");
+            AssertEq(T(EventsNamed(b, "pulse")[0].Get("name")), "pulse", "the pulse fired");
+            JsonValue goneB = SnapAt(b, 300).Get("drifters");
+            AssertEq(goneB.Arr_.Count, 1, "the entry stays in the list, frozen");
+            AssertEq(T(goneB.Arr_[0].Get("state")), "removed", "it fled its 240 ticks and is gone");
+            AssertEq(SnapAt(b, 300).Get("player").Get("carried").I, 5, "pulse motes spent, nothing stolen");
+
+            // (c) steal, then pulse the fleeing looter → drops the loot as motes, vanishes 120 ticks on.
+            string scC = "{\"player\":{\"pos\":[0,0,0],\"carried\":7},\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[],\"charms\":[]," +
+                "\"drifters\":[{\"id\":\"D1\",\"pos\":[0,0,5]}]}";
+            List<JsonValue> c = Run(5, scC, "{\"frames\":[{\"tick\":40,\"pulse\":true}]}", 200, 200, 2);
+            AssertEq(EventsNamed(c, "drifter_steal").Count, 1, "the steal happens first");
+            var drop = EventsNamed(c, "drifter_drop");
+            AssertEq(drop.Count, 1, "the pulse makes it drop the loot");
+            AssertEq(drop[0].Get("tick").I, 41, "pulse frame at tick 40 -> event tick 41");
+            AssertEq(drop[0].Get("data").Get("amount").I, 3, "drops all of it");
+            JsonValue snapC = SnapAt(c, 200);
+            AssertEq(snapC.Get("drifters").Arr_.Count, 0, "vanishes 120 ticks after the drop");
+            AssertEq(snapC.Get("motes_active").I, 3, "the dropped motes lie where they fell");
+            AssertEq(T(snapC.Get("motes").Arr_[0].Get("kind")), "dropped", "kind is dropped");
+            AssertEq(snapC.Get("player").Get("carried").I, 1, "7 - 3 stolen - 3 pulse; the drop is out of pickup reach");
+        }
+
+        private static void T23_Charm()
+        {
+            // C1 one metre ahead: picked on the first pickup step, charm_s counts down from 600 ticks.
+            string sc = "{\"player\":{\"pos\":[0,0,0]},\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[],\"random_drifters\":false," +
+                "\"charms\":[{\"id\":\"C1\",\"pos\":[0,0,1]}]}";
+
+            // Movement at 7.2 m/s while charmed: 33 and 68 steps of walking after the pickup.
+            List<JsonValue> run = Run(11, sc, "{\"frames\":[{\"tick\":2,\"move\":[0,1]}]}", 70, 35, 2);
+            var picked = EventsNamed(run, "charm_picked");
+            AssertEq(picked.Count, 1, "charm picked up on tick 1");
+            AssertEq(picked[0].Get("tick").I, 1, "the pickup is an event");
+            AssertEq(picked[0].Get("data").Get("charm_ticks").I, 600, "600 ticks of charm");
+            AssertNear(Axis(SnapAt(run, 35).Get("player").Get("pos"), 2), 33 * 0.12, 1e-6, "7.2 m/s while charmed");
+            AssertNear(Axis(SnapAt(run, 70).Get("player").Get("pos"), 2), 68 * 0.12, 1e-6, "still charmed at tick 70");
+            AssertNear(SnapAt(run, 70).Get("player").Get("charm_s").Num(-1), 531.0 / 60.0, 1e-3, "charm_s counts down in the snapshot");
+
+            // Dash has no cooldown while charmed: two dashes 20 ticks apart (90 would block).
+            // Dash is edge-triggered, so the stream must release the button between presses.
+            List<JsonValue> dashes = Run(11, sc, "{\"frames\":[{\"tick\":20,\"dash\":true},{\"tick\":35,\"dash\":false},{\"tick\":40,\"dash\":true}]}", 70, 70, 2);
+            AssertEq(EventsNamed(dashes, "dash").Count, 2, "the second dash fires inside the cooldown window");
+
+            // Full cycle: charm expires, respawns on its spot after 2700 ticks, picked again next tick.
+            List<JsonValue> cycle = Run(11, sc, null, 2710, 2710, 2);
+            var both = EventsNamed(cycle, "charm_picked");
+            AssertEq(both.Count, 2, "the charm comes back and is picked again");
+            AssertEq(both[1].Get("tick").I, 2702, "respawn at tick 2701, pickable from tick 2702");
+            AssertEq(OfType(cycle, "end")[0].Get("ticks").I, 2710, "the run completed the full length");
+        }
+
+        private static void T24_Wind()
+        {
+            // Night 3 only. Gust window: the first 300 ticks of every 1800 (1..300, 1801..2100);
+            // each gust draws its direction once at its start, from the seeded stream.
+            string off = "{\"random_motes\":false,\"random_shades\":false,\"random_drifters\":false,\"wind_enabled\":false}";
+            string on = "{\"random_motes\":false,\"random_shades\":false,\"random_drifters\":false,\"wind_enabled\":true}";
+
+            List<JsonValue> a = Run(13, off, null, 2200, 200, 3);
+            List<JsonValue> b = Run(13, on, null, 2200, 200, 3);
+
+            Assert(B(SnapAt(a, 200).Get("wind").Get("active")) == false, "wind_enabled false means never");
+            AssertNear(Axis(SnapAt(a, 200).Get("player").Get("pos"), 0), 0.0, 1e-9, "wind-off player never moves");
+
+            // Inside gust 1: pushed 200 ticks at 2 m/s along the drawn direction.
+            JsonValue p200 = SnapAt(b, 200).Get("player");
+            Assert(B(SnapAt(b, 200).Get("wind").Get("active")), "gust 1 covers ticks 1..300");
+            AssertNear(Math.Sqrt(p200.Get("pos").Vec(3)[0] * p200.Get("pos").Vec(3)[0] + p200.Get("pos").Vec(3)[2] * p200.Get("pos").Vec(3)[2]), 200 * (2.0 / 60.0), 2e-3, "200 gust ticks at 2 m/s of push");
+            Assert(Math.Abs(NormalizeDeg(Math.Atan2(Axis(p200.Get("pos"), 2), Axis(p200.Get("pos"), 0)) * 180.0 / Math.PI) - SnapAt(b, 200).Get("wind").Get("dir_deg").Num(-1000.0)) < 1.5, "the drift follows the drawn gust direction");
+
+            // Quiet in between: gust 1 ended at tick 300, the player has stood still since.
+            JsonValue p1000 = SnapAt(b, 1000).Get("player");
+            Assert(B(SnapAt(b, 1000).Get("wind").Get("active")) == false, "quiet between the gust windows");
+            AssertNear(Math.Sqrt(p1000.Get("pos").Vec(3)[0] * p1000.Get("pos").Vec(3)[0] + p1000.Get("pos").Vec(3)[2] * p1000.Get("pos").Vec(3)[2]), 300 * (2.0 / 60.0), 2e-3, "the gust-1 push is permanent");
+            AssertNear(SnapAt(b, 1000).Get("wind").Get("dir_deg").Num(-1), SnapAt(b, 200).Get("wind").Get("dir_deg").Num(-2), 1e-9, "dir_deg keeps the drawn angle");
+
+            // Gust 2 draws its own direction; the leg from tick 1000 to 2000 follows it.
+            JsonValue p2000 = SnapAt(b, 2000).Get("player");
+            Assert(B(SnapAt(b, 2000).Get("wind").Get("active")), "gust 2 covers ticks 1801..2100");
+            double dx = Axis(p2000.Get("pos"), 0) - Axis(p1000.Get("pos"), 0);
+            double dz = Axis(p2000.Get("pos"), 2) - Axis(p1000.Get("pos"), 2);
+            AssertNear(Math.Sqrt(dx * dx + dz * dz), 200 * (2.0 / 60.0), 2e-3, "200 more gust ticks along the second draw");
+            double deg2 = NormalizeDeg(Math.Atan2(dz, dx) * 180.0 / Math.PI);
+            Assert(Math.Abs(deg2 - SnapAt(b, 2000).Get("wind").Get("dir_deg").Num(-1000.0)) < 1.5, "the second leg follows the second draw");
+
+            // After the gust the direction is remembered and the player stands still again.
+            // The full gust-2 leg is 300 pushes (ticks 1801..2100): 10 m along the second draw.
+            Assert(B(SnapAt(b, 2200).Get("wind").Get("active")) == false, "the gust ends by tick 2100");
+            AssertNear(SnapAt(b, 2200).Get("wind").Get("dir_deg").Num(-1), SnapAt(b, 2000).Get("wind").Get("dir_deg").Num(-2), 1e-9, "dir_deg keeps the second angle");
+            double dxEnd = Axis(SnapAt(b, 2200).Get("player").Get("pos"), 0) - Axis(p1000.Get("pos"), 0);
+            double dzEnd = Axis(SnapAt(b, 2200).Get("player").Get("pos"), 2) - Axis(p1000.Get("pos"), 2);
+            AssertNear(Math.Sqrt(dxEnd * dxEnd + dzEnd * dzEnd), 300 * (2.0 / 60.0), 2e-3, "the gust runs to tick 2100, then stops");
+            Assert(Math.Abs(NormalizeDeg(Math.Atan2(dzEnd, dxEnd) * 180.0 / Math.PI) - SnapAt(b, 2200).Get("wind").Get("dir_deg").Num(-1000.0)) < 1.5, "the full leg follows the second draw");
+
+            AssertEq(Serialize(Run(13, on, null, 2200, 200, 3)), Serialize(b), "the gust draws are deterministic per seed");
+        }
+
+        private static double NormalizeDeg(double deg)
+        {
+            deg %= 360.0;
+            return deg < 0 ? deg + 360.0 : deg;
         }
     }
 }
