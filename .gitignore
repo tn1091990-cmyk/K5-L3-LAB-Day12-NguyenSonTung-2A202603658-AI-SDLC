@@ -1,0 +1,19 @@
+# .NET build output
+bin/
+obj/
+
+# Unity generated folders
+Library/
+Temp/
+Logs/
+UserSettings/
+MemoryCaptures/
+Builds/
+
+# OS noise
+Thumbs.db
+.DS_Store
+
+# secrets (RULES: never commit)
+.env
+*.user
