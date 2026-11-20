@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>DaoDenLong.Tests</AssemblyName>
+    <RootNamespace>DaoDenLong.Tests</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+  <!-- The same single source of truth the game and the headless runner compile. -->
+  <ItemGroup>
+    <Compile Include="..\..\UnityProject\Assets\DaoDenLong\Core\*.cs" />
+  </ItemGroup>
+
+</Project>
