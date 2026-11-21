@@ -31,3 +31,21 @@ the `AGENTS.md` harness) did the bulk of implementation under review.
   The core was right each time; the Phase-1 tests never moved.
 - Assumptions 8–16 record the choices the ticket left open; binding ones were agreed with the
   human before the phase-2 tag.
+
+## Phase 3 (2026-11-21)
+- Human read the Phase-3 requirements; the agent implemented the v1.2 lantern fuel rules in the
+  shared core — fuel in integer units (ADR-001 #1), top-up/relight costs, the `drain` shade
+  state, the low-fuel safe-zone gate, `lantern_out`, and the dawn win threshold — and grew the
+  suite from 24 to 29 tests. Real outputs: `docs/proof/phase-3/` (double-run SHA-256 matches,
+  suite 29/29, rules demo is byte-for-byte runner output).
+- The four Phase-1 tests whose rules v1.2 replaces were updated in place with reasons (T06
+  scoring, T11 win order); nothing was skipped. Design record: `docs/adr/ADR-001-...`; breaking
+  changes: `CHANGELOG.md`; acceptance criteria incl. manual Unity checks: `docs/specs/PHASE-3-SPEC.md`.
+- Debugging worth recording: the first run of the new tests had 4 failures, again all in the
+  tests' own expectations — half-speed wander moved T26's walk-in timeline; the `fuel_drain`
+  beat line prints the top-of-minute value before that minute's subtractions (19.1, not 19.0);
+  scenario lanterns never shrink the default island so T27's denominator is 5; and the loader's
+  long-standing lenient-text convention (number → unset, no throw) was pinned as-is. The core
+  was right every time; the Phase-1 pinned tests were untouched.
+- Unity Windows build still blocked on the expired editor license token (unchanged from
+  Phase 1's note); presentation-layer checks stay manual-check criteria in the spec.

@@ -1,5 +1,30 @@
 # CHANGELOG
 
+## [Phase 3] — 2026-11-21
+- **Breaking** contract bumped to v1.2 for the lantern fuel rules. Eight tuning keys appended
+  after `night3_duration_s` in published order, then the score block; standard values locked
+  (durations 240/270/300 s; FuelMax 100, decay 1.0/s, +10 per mote, relight 5, WinRatio 0.6,
+  drain 5.0/s, low-fuel threshold 30 — exactly 30 keeps the zone; capacity max 20; chase
+  range 6.0; weak-lantern walk max 2.0; score per_mote 5, per_lantern 100, per_relight 40).
+- New events `refuel`, `lantern_out`, `fuel_drain` (one line per 60 ticks, top-of-minute
+  value — see ADR-001 #4); `lantern_lit` gains `relight: true|false`; `game_over.reason` gains
+  `dawn_survived`; **`all_lit` no longer ends the Night early**.
+- Snapshot: lanterns gain `fuel`/`ever_lit`, player gains `successful_lights`, top level gains
+  `capacity`; scenario: player `successful_lights`, shades `state`/`target_lantern_id`,
+  lanterns `fuel`/`ever_lit` (lit without fuel means `fuel: 100`).
+- Win rule changed to the dawn threshold `ceil(0.6 x 5) = 3` lit; dawn bonuses only on a
+  won-at-dawn; flames-0 loss still checked first. Fuel stored in integer units (1 point = 60),
+  printed to 1 decimal (ADR-001). Design record: `docs/adr/ADR-001-lantern-fuel-state-and-win-rules.md`.
+- Tests updated because v1.2 replaces their rules (reasons in-file, nothing skipped): T06
+  scoring pins (200→5 per mote, no time bonus), T11 (no early all-lit win). Suite grown to 29
+  tests (T25 relight/top-up, T26 drain walk-in + beats + lantern_out, T27 dawn threshold,
+  T28 capacity, T29 loader/contract), all green — `docs/proof/phase-3/tests.txt`; determinism
+  double-run in `docs/proof/phase-3/determinism.md`; rules demo `docs/proof/phase-3/rules_demo.md`.
+- Part-3 acceptance criteria (drifters, charms, 3-night chain, pause, settings, sound, HUD,
+  palette incl. colourblind/flicker items): `docs/specs/PHASE-3-SPEC.md`. Presentation items
+  stay manual checks — the Unity build on this machine is still blocked by the editor license
+  token (unchanged from Phase 1's note).
+
 ## [Phase 2] — 2026-11-21
 - Contract bumped to v1.1: dash (14 m/s × 0.2 s, 1.5 s cooldown) and pause/resume in the core,
   new snapshot fields (`night`, `wind`, player `vel`/`invuln`/`dash_cd_s`/`pulse_cd_s`/`charm_s`,

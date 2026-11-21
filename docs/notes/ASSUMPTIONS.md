@@ -40,3 +40,17 @@ Things the lab docs left open, and what I chose (agreed with the human where it 
     per-island centres would change Night-1 output.
 16. **`night_start` is emitted by the Engine, not by `Build`** (Build promised no events); the
     line precedes the tick-0 snapshot.
+17. **v1.2 fuel is stored in integer units (1 display point = 60 units), printed to 1 decimal;**
+    scenario fuel above `fuel_max` is accepted unclamped (loader guards `>= 0` only). Agreed
+    with the human before coding; full record in `docs/adr/ADR-001-lantern-fuel-state-and-win-rules.md`.
+18. **`fuel_drain` beat lines print the tank at the top of the minute, before that minute's
+    subtractions** (decay loop, then drain loop, then lanterns-out run per step; snapshots print
+    after the step) — so a beat line and the next snapshot differ by exactly one decrement.
+    Pinned by T29 (19.1 vs 19.0) and T26-run2.
+19. **A drain shade enters from wander at ≤ 2 m XZ measured before the step moves**, the first
+    sip is the step after entry, and the low-fuel gate is exclusive-below: exactly 30 points
+    KEEPS the safe zone; the push loop only runs for lanterns that still have one (lit AND ≥ 30).
+20. **Scenario lanterns are updates to the default five-lantern island, never a replacement,**
+    so the dawn threshold denominator is always 5 (`ceil(0.6 × 5) = 3`); `drain` is appended at
+    the end of the `ShadeState` enum; the loader keeps its lenient text-field convention (a
+    number in a text field falls back to "unset") — T29 asserts the convention as-is.
