@@ -288,8 +288,8 @@ namespace DaoDenLong.View
             }
             else
             {
-                GUILayout.Label("WASD move  ·  Space jump  ·  E deposit  ·  Q / click pulse  ·  hold right-drag: camera",
-                                new Rect(16, Screen.height - 36, Screen.width - 32, 24));
+                GUI.Label(new Rect(16, Screen.height - 36, Screen.width - 32, 24),
+                          "WASD move  ·  Space jump  ·  E deposit  ·  Q / click pulse  ·  hold right-drag: camera");
             }
         }
 
