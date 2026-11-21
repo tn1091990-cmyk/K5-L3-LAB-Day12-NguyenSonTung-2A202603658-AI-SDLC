@@ -378,6 +378,9 @@ namespace DaoDenLong.Core
         private bool _prevPause, _prevDash;
         private bool _randomDrifters = true, _windEnabled;        private string _overReason;
         private bool _randomMotes = true, _randomShades = true;
+        // v1.3 (TICKET-04): benchmark mode. Spawn, pickup, damage, fuel decay and end
+        // conditions are switched off; movement (wander and the normal rules) keeps running.
+        public bool Bench;
         private int _lastFallLost;                        // motes vanished on the last fall (for the Phase 2 event field)
         private bool _prevJump, _prevInteract, _prevPulse;    // action edges (contract section C)
 
@@ -794,7 +797,7 @@ namespace DaoDenLong.Core
             // v1.2 (Ticket-03): step 2 subtracts the fuel — every lit lantern drinks its own decay,
             // and every drain shade sips from the lantern it sits at. Fuel lives in whole units of
             // 1/60 of a fuel point, so a full tick is an exact integer and never drifts.
-            if (T.FuelDecayPerS > 0)
+            if (!Bench && T.FuelDecayPerS > 0)
             {
                 long decay = (long)Math.Round(T.FuelDecayPerS);       // points/s == units/tick at 60 fps
                 foreach (Lantern l in Lanterns) if (l.Lit) l.FuelUnits -= decay;
@@ -996,6 +999,7 @@ namespace DaoDenLong.Core
 
         private void Pickups()
         {
+            if (Bench) return;
             if (Player.FallWaitTicks > 0) return;
             if (Player.Carried >= CapacityNow()) return;
             foreach (Mote m in SortedMotes())
@@ -1294,6 +1298,7 @@ namespace DaoDenLong.Core
 
         private void DrifterContacts()
         {
+            if (Bench) return;
             if (Player.FallWaitTicks > 0) return;
             foreach (Drifter d in SortedDrifters())
             {
@@ -1316,6 +1321,7 @@ namespace DaoDenLong.Core
 
         private void Contacts()
         {
+            if (Bench) return;
             if (Player.FallWaitTicks > 0) return;
             foreach (Shade s in SortedShades())
             {
@@ -1363,6 +1369,7 @@ namespace DaoDenLong.Core
 
         private void Spawns()
         {
+            if (Bench) return;
             // Motes: one extra mote at 240, 480, ... while the cap is not reached.
             if (_randomMotes && SimTick >= T.MoteSpawnStartTick && SimTick % T.MoteSpawnEvery == 0 && Motes.Count < T.MoteCap)
             {
@@ -1439,6 +1446,7 @@ namespace DaoDenLong.Core
 
         private void CheckEnd()
         {
+            if (Bench) return;
             if (Player.Flames <= 0) { End(false, "no_flames"); return; }     // always a loss, checked first
             // v1.2 (Ticket-03): no early win any more. The Night runs its full length and Mây
             // wins only by being alive at dawn with at least 60% of the lanterns lit.

@@ -1,9 +1,11 @@
 {
-  "contract_version": "1.2",
+  "contract_version": "1.3",
   "team": "2A202603658-nguyen-son-tung",
   "build_cmd": "dotnet build DotNet/DaoDenLong.Headless -c Release",
   "run_cmd": "dotnet run --project DotNet/DaoDenLong.Headless -c Release",
   "headless_cmd": "dotnet run --project DotNet/DaoDenLong.Headless -c Release --",
+  "bench_cmd": "dotnet run --project DotNet/DaoDenLong.Headless -c Release -- --bench",
+  "soak_cmd": "dotnet run --project DotNet/DaoDenLong.Headless -c Release -- --soak",
   "tuning": {
     "player_speed": 6.0,
     "carry_capacity": 10,
