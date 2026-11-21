@@ -13,7 +13,7 @@ deterministic core is a pure-C# library shared by the Unity game and the headles
 - `UnityProject/Assets/DaoDenLong/Core/` — the deterministic simulation (pure C#, no UnityEngine,
   no `System.IO`, no NuGet). Both Unity and .NET compile these same files.
 - `DotNet/DaoDenLong.Headless/` — the Test Contract runner (JSONL, exit 0 / 2).
-- `DotNet/DaoDenLong.Tests/` — the self-made test suite (29 tests, exit = number of failures).
+- `DotNet/DaoDenLong.Tests/` — the self-made test suite (31 tests, exit = number of failures).
 - `game.contract.json` — the Test Contract declaration at the repo root.
 - `docs/notes/` — honest notes: assumptions, AI journal, retro. `docs/proof/` — per-phase evidence.
 

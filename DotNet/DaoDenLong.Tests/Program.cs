@@ -56,6 +56,8 @@ namespace DaoDenLong.Tests
                 ("T27 win rules (v1.2): no early win, dawn threshold, dawn_survived", T27_WinRules),
                 ("T28 capacity (v1.2): +2 per successful light, capped at 20", T28_CapacityScale),
                 ("T29 v1.2 fields: scenario fuel/ever_lit/drain-target round-trip", T29_FieldsV12),
+                ("T30 leaderboard: name rules, top-10, score desc, ties keep achievement order", T30_Leaderboard),
+                ("T31 soak inputs: same seed, same stream; the three Night clocks", T31_SoakInputs),
             };
 
             foreach (var (name, body) in tests)
@@ -1331,6 +1333,90 @@ namespace DaoDenLong.Tests
             Assert(Loader.ScenarioFromJson("{\"shades\":[{\"pos\":[0,0,0],\"state\":\"drain\",\"target_lantern_id\":42}]}").Shades[0].TargetLanternId == null,
                 "a number in a text field falls back to 'unset' like the id fields do - the loader does not throw there");
             ThrowsFormat(() => Loader.ScenarioFromJson("{\"player\":{\"successful_lights\":1.5}}"), "fractional successful_lights");
+        }
+
+        private static void T30_Leaderboard()
+        {
+            // Name rules: the core set is [A-Za-z0-9_]{3,12}; Vietnamese diacritics are the bonus.
+            Assert(Leaderboard.ValidName("Ngoc_Anh"), "plain ASCII name");
+            Assert(Leaderboard.ValidName("NguyÔn_Thị"), "diacritics accepted as the bonus");
+            Assert(Leaderboard.ValidName("abc"), "shortest allowed");
+            Assert(Leaderboard.ValidName("abcdefghijkl"), "longest allowed");
+            Assert(!Leaderboard.ValidName("ab"), "two letters rejected");
+            Assert(!Leaderboard.ValidName("abcdefghijklm"), "thirteen letters rejected");
+            Assert(!Leaderboard.ValidName("ngoc anh"), "space is outside the rule");
+            Assert(!Leaderboard.ValidName("ngoc!anh"), "punctuation is outside the rule");
+            Assert(!Leaderboard.ValidName(null), "null rejected");
+
+            Leaderboard lb = new Leaderboard();
+            Assert(lb.Add("Nguyen", 250, 2, "2026-03-01T10:00:00Z", 42), "valid add");
+            Assert(lb.Add("Tran", 250, 3, "2026-03-01T09:00:00Z", 7), "valid add");      // achieved earlier than Nguyen
+            Assert(lb.Add("LeNg", 300, 1, "2026-03-01T11:00:00Z", 8), "valid add");
+            Assert(!lb.Add("xy", 999, 0, "2026-03-01T12:00:00Z", 9), "invalid name returns false");
+            AssertEq(lb.Entries.Count, 3, "a rejected name leaves no entry");
+
+            AssertEq(T(lb.ToJson().Get("entries").Arr_[0].Get("name")), "LeNg", "highest score on top");
+            AssertEq(T(lb.ToJson().Get("entries").Arr_[1].Get("name")), "Tran", "tied scores: the earlier achieved_at stands above");
+            AssertEq(T(lb.ToJson().Get("entries").Arr_[2].Get("name")), "Nguyen", "...then the later one");
+            AssertEq(T(lb.ToJson().Get("entries").Arr_[0].Get("achieved_at")), "2026-03-01T11:00:00Z", "achieved_at round-trips");
+            AssertEq(lb.ToJson().Get("entries").Arr_[0].Get("nights_won").I, 1, "nights_won round-trips");
+            AssertEq(lb.ToJson().Get("entries").Arr_[0].Get("seed").I, 8, "seed round-trips");
+            try { lb.Add("Range", 1, 4, "x", 0); throw new Exception("nights_won 4 must throw"); }
+            catch (ArgumentOutOfRangeException) { }
+
+            // Top 10: eleven entries, the weakest never reaches the board.
+            Leaderboard big = new Leaderboard();
+            for (int i = 1; i <= 11; i++)
+                big.Add("player" + i, i * 10, 0, "2026-03-02T00:00:0" + i + "Z", i);
+            AssertEq(big.Entries.Count, Leaderboard.MaxEntries, "the board holds ten");
+            AssertEq(T(big.ToJson().Get("entries").Arr_[0].Get("name")), "player11", "top of the big board");
+            AssertEq(T(big.ToJson().Get("entries").Arr_[9].Get("name")), "player2", "the eleventh-weakest is the last line");
+
+            // The export document survives a parse round-trip in the same order.
+            Leaderboard again = Leaderboard.FromJson(JsonValue.Parse(big.ToJson().Serialize()));
+            AssertEq(again.Entries.Count, 10, "round-trip count");
+            for (int i = 0; i < 10; i++)
+                AssertEq(T(again.ToJson().Get("entries").Arr_[i].Get("name")), T(big.ToJson().Get("entries").Arr_[i].Get("name")), "round-trip order at " + i);
+        }
+
+        private static void T31_SoakInputs()
+        {
+            // The generator is deterministic: two calls with the same seed are field for field equal.
+            List<InputFrame> a = SoakInputs.Generate(8, 500);
+            List<InputFrame> b = SoakInputs.Generate(8, 500);
+            AssertEq(a.Count, 500, "one frame per tick");
+            for (int k = 0; k < 500; k++)
+            {
+                Assert(a[k].MoveX == b[k].MoveX && a[k].MoveZ == b[k].MoveZ, "move stream equal at tick " + k);
+                Assert(a[k].Jump == b[k].Jump && a[k].Dash == b[k].Dash && a[k].Pulse == b[k].Pulse && a[k].Interact == b[k].Interact,
+                    "button stream equal at tick " + k);
+            }
+
+            // Directions hold between the 30-tick re-rolls (the spec's "choose again every 30 ticks").
+            Assert(a[0].MoveX == a[29].MoveX && a[0].MoveZ == a[29].MoveZ, "the direction is held between re-rolls");
+
+            // Another seed feeds another stream, so the ten soak Nights do not play the same game.
+            List<InputFrame> c = SoakInputs.Generate(9, 500);
+            bool same = true;
+            for (int k = 0; k < 500; k++)
+                if (a[k].MoveX != c[k].MoveX || a[k].Jump != c[k].Jump) { same = false; break; }
+            Assert(!same, "different seeds, different streams");
+
+            AssertEq(SoakInputs.NightTicks(1), 14400, "Night 1 is 240 s of ticks");
+            AssertEq(SoakInputs.NightTicks(2), 16200, "Night 2 is 270 s of ticks");
+            AssertEq(SoakInputs.NightTicks(3), 18000, "Night 3 is 300 s of ticks");
+
+            // And a whole Night driven by the stream is byte-identical across runs.
+            string one = SerializeAll(Engine.Run(8, null, SoakInputs.Generate(8, 600), 600, 100000, 1));
+            string two = SerializeAll(Engine.Run(8, null, SoakInputs.Generate(8, 600), 600, 100000, 1));
+            Assert(one == two, "the seeded soak stream is deterministic end to end");
+        }
+
+        private static string SerializeAll(List<JsonValue> lines)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (JsonValue l in lines) sb.Append(l.Serialize()).Append('\n');
+            return sb.ToString();
         }
 
         private static double NormalizeDeg(double deg)
