@@ -6,6 +6,7 @@
 #if UNITY_EDITOR
 using System.IO;
 using UnityEditor;
+using UnityEditor.Build.Reporting;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -22,7 +23,7 @@ namespace DaoDenLong.EditorTools
         {
             if (File.Exists(ScenePath)) { Debug.Log("Scene exists: " + ScenePath); return; }
             Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));
-            Scene scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameSetup, NewSceneMode.Single);
+            Scene scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
             GameObject go = new GameObject("GameBootstrap");
             go.AddComponent<View.GameBootstrap>();
             EditorSceneManager.MarkSceneDirty(scene);
