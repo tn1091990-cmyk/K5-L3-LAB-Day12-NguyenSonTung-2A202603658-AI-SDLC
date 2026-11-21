@@ -18,7 +18,7 @@ namespace DaoDenLong.Core
         public double InteractRadius = 2.0;
         public int PulseCost = 3;
         public double PulseRadius = 5.0;
-        public int Night1DurationS = 300;
+        public int Night1DurationS = 240;         // v1.2: Ticket-03 sets the Night lengths to 240/270/300 s
         public int Flames = 3;
         public double InvulnS = 1.5;              // 90 ticks
         public double HitDropRatio = 0.5;         // floor(carried / 2) motes drop on a hit
@@ -55,11 +55,15 @@ namespace DaoDenLong.Core
         public int FallWaitTicks = 60;
         public double FallY = -10.0;
         public int ShadeSpawnMinPlayerDist = 15;
-        public int ScorePerMote = 10;             // per mote deposited into a lantern
-        public int ScorePerLantern = 100;
+        public int ScorePerMote = 5;              // v1.2 table: per mote deposited (new light, relight or top-up)
+        public int ScorePerLantern = 100;         // first light of a lantern during the Night
+        public int ScorePerRelight = 40;          // v1.2: a relight (ever_lit lantern) is worth less than a first light
         public int ScorePerStun = 5;
-        public int ScorePerSecondLeft = 2;        // win bonus
-        public int ScorePerFlameLeft = 50;        // win bonus
+        public int ScorePerStunDrain = 15;        // v1.2: a total of +15 when the shade was in drain right before
+        public int ScorePerSecondLeft = 0;        // v1.2: the time bonus is gone; key stays, value 0
+        public int ScorePerFlameLeft = 50;        // win bonus, dawn only
+        public int ScorePerDawnLantern = 50;      // v1.2 dawn bonus: per lit lantern, plus floor(fuel) points
+        public int ScorePerDawnFuelPoint = 1;     // v1.2 dawn bonus: +1 per full fuel point on a lit lantern
 
         public double IslandRadius = 40.0;        // Night 1 - Đảo Bến, cloud sea beyond the rim
 
@@ -67,8 +71,8 @@ namespace DaoDenLong.Core
         public double DashSpeed = 14.0;           // m/s
         public double DashDurationS = 0.2;        // 12 ticks
         public double DashCooldownS = 1.5;        // 90 ticks, counted from the dash start
-        public int Night2DurationS = 330;
-        public int Night3DurationS = 360;
+        public int Night2DurationS = 270;         // v1.2 values, keys stay in the published order
+        public int Night3DurationS = 300;
 
         // The rest Ticket-02 standardises but does not publish as contract keys.
         public int DashDurationTicks = 12;
@@ -96,6 +100,21 @@ namespace DaoDenLong.Core
         public int ShadeMaxNight2 = 8;
         public int ShadeEveryNight3 = 360;        // one every 6 s after tick 300, at most 10
         public int ShadeMaxNight3 = 10;
+
+        // Numbers Ticket-03 adds for Phase 3 (contract v1.2), appended after the published keys.
+        // Fuel is counted in whole units of 1/60 of a fuel point, so decay (1 point/s) and drain
+        // (5 points/s) are exact integers per tick and never drift (assumption, docs/notes/ASSUMPTIONS.md).
+        public const long FuelUnitsPerPoint = 60; // one fuel point = 60 units
+        public int FuelMax = 100;                 // a lantern lights up with full fuel
+        public double FuelDecayPerS = 1.0;        // a lit lantern drinks one fuel point per second
+        public int FuelPerMote = 10;              // one mote tops up ten fuel points
+        public int RelightCost = 5;               // a lantern that has ever shone needs only five motes
+        public double WinRatio = 0.6;             // win at dawn with ceil(0.6 x total) lanterns still lit
+        public double DrainPerS = 5.0;            // a drain shade sips five fuel points per second
+        public int LowFuelThreshold = 30;         // below this a lantern loses its safe zone (exactly 30 keeps it)
+        public int CapacityMax = 20;              // carry cap ceiling: 10 + 2 x successful lightings, up to this
+        public double DrainChaseRange = 6.0;      // a drain shade turns on Mây when it comes this close
+        public double LowFuelWalkMax = 2.0;       // a wander shade starts sipping when this close to its weak lantern
 
         public static Tuning Standard() { return new Tuning(); }
 
@@ -128,12 +147,27 @@ namespace DaoDenLong.Core
             o.Set("dash_cooldown_s", JsonValue.Real(DashCooldownS, 1));
             o.Set("night2_duration_s", JsonValue.Int(Night2DurationS));
             o.Set("night3_duration_s", JsonValue.Int(Night3DurationS));
+            // v1.2 adds exactly these eight keys, appended in Ticket-03's order.
+            o.Set("fuel_max", JsonValue.Int(FuelMax));
+            o.Set("fuel_decay_per_s", JsonValue.Real(FuelDecayPerS, 1));
+            o.Set("fuel_per_mote", JsonValue.Int(FuelPerMote));
+            o.Set("relight_cost", JsonValue.Int(RelightCost));
+            o.Set("win_ratio", JsonValue.Real(WinRatio, 1));
+            o.Set("drain_per_s", JsonValue.Int((int)DrainPerS));
+            o.Set("low_fuel_threshold", JsonValue.Int(LowFuelThreshold));
+            o.Set("capacity_max", JsonValue.Int(CapacityMax));
             JsonValue s = JsonValue.Obj();
+            // v1.2 score table: the five published keys keep their slots with new values,
+            // the new bonus keys are appended (time bonus is gone, per_second_left stays at 0).
             s.Set("per_mote", JsonValue.Int(ScorePerMote));
             s.Set("per_lantern", JsonValue.Int(ScorePerLantern));
             s.Set("per_stun", JsonValue.Int(ScorePerStun));
             s.Set("per_second_left", JsonValue.Int(ScorePerSecondLeft));
             s.Set("per_flame_left", JsonValue.Int(ScorePerFlameLeft));
+            s.Set("per_relight", JsonValue.Int(ScorePerRelight));
+            s.Set("per_stun_drain", JsonValue.Int(ScorePerStunDrain));
+            s.Set("per_dawn_lantern", JsonValue.Int(ScorePerDawnLantern));
+            s.Set("per_dawn_fuel", JsonValue.Int(ScorePerDawnFuelPoint));
             o.Set("score", s);
             return o;
         }
@@ -188,6 +222,7 @@ namespace DaoDenLong.Core
         public Player PlayerRef;
         public List<Drifter> Drifters = new List<Drifter>();
         public List<Charm> Charms = new List<Charm>();
+        public int Capacity;      // v1.2: the carry cap Mây is living under right now
 
         public JsonValue ToJson()
         {
@@ -218,6 +253,7 @@ namespace DaoDenLong.Core
                 p.Set("pulse_cd_s", JsonValue.Real(Math.Round(PlayerRef.PulseCdTicks / (double)Simulation.TicksPerSecond, 3, MidpointRounding.AwayFromZero), 3));
                 p.Set("charm_s", JsonValue.Real(Math.Round(PlayerRef.CharmTicksLeft / (double)Simulation.TicksPerSecond, 3, MidpointRounding.AwayFromZero), 3));
             }
+            p.Set("capacity", JsonValue.Int(Capacity));   // v1.2: carried/capacity is what the HUD shows
             o.Set("player", p);
 
             JsonValue ls = JsonValue.Arr();
@@ -228,6 +264,10 @@ namespace DaoDenLong.Core
                 lj.Set("pos", SnapshotData.Pos(l.Pos, 3));
                 lj.Set("lit", JsonValue.Bool(l.Lit));
                 lj.Set("deposited", JsonValue.Int(l.Deposited));
+                // v1.2: the fuel tank as a real number, 1 decimal (unlit lanterns sit at 0).
+                lj.Set("fuel", JsonValue.Real(Math.Round(l.FuelUnits / (double)Tuning.FuelUnitsPerPoint, 1, MidpointRounding.AwayFromZero), 1));
+                lj.Set("ever_lit", JsonValue.Bool(l.EverLit));
+                lj.Set("relit_count", JsonValue.Int(l.RelitCount));
                 ls.Add(lj);
             }
             o.Set("lanterns", ls);
@@ -576,6 +616,7 @@ namespace DaoDenLong.Core
                 Player.PulseCdTicks = sc.PlayerPulseCdTicks;
                 Player.CharmTicksLeft = sc.PlayerCharmTicks;
             }
+            if (sc.HasPlayerSuccessfulLights) Player.SuccessfulLights = sc.PlayerSuccessfulLights;   // v1.2
             _randomMotes = sc.RandomMotes;
             _randomShades = sc.RandomShades;
             if (sc.HasMotes)
@@ -597,6 +638,7 @@ namespace DaoDenLong.Core
                         : sp.Id;
                     if (sp.HasState) s.State = sp.State;
                     if (sp.HasStateTicksLeft) s.StateTicksLeft = sp.StateTicksLeft;
+                    if (sp.HasTarget) s.TargetLanternId = sp.TargetLanternId;   // v1.2
                     Shades.Add(s);
                 }
             }
@@ -608,6 +650,10 @@ namespace DaoDenLong.Core
                 if (lu.HasPos) l.Pos = lu.Pos;
                 if (lu.HasLit) l.Lit = lu.Lit;
                 if (lu.HasDeposited) l.Deposited = lu.Deposited;
+                // v1.2 setup fields: fuel in whole 1/60-point units, and the memory of having shone.
+                if (lu.HasFuel) l.FuelUnits = (long)Math.Round(lu.Fuel * Tuning.FuelUnitsPerPoint);
+                else if (lu.HasLit) l.FuelUnits = lu.Lit ? T.FuelMax * Tuning.FuelUnitsPerPoint : 0;
+                if (lu.HasEverLit) l.EverLit = lu.EverLit;
             }
             if (sc.HasRandomDrifters) _randomDrifters = sc.RandomDrifters;
             if (sc.HasWindEnabled) _windEnabled = sc.WindEnabled;
@@ -697,6 +743,7 @@ namespace DaoDenLong.Core
             s.Lanterns = SortedLanterns(); s.Shades = SortedShades(); s.Motes = SortedMotes();
             s.Night = Night; s.WindActive = WindActive; s.WindDirDeg = WindDirDeg;
             s.PlayerRef = Player; s.Drifters = SortedDrifters(); s.Charms = SortedCharms();
+            s.Capacity = (int)CapacityNow();       // v1.2
             return s;
         }
 
@@ -742,6 +789,44 @@ namespace DaoDenLong.Core
                     c.Available = true;
                     c.SpawnTick = (int)SimTick;
                 }
+            }
+
+            // v1.2 (Ticket-03): step 2 subtracts the fuel — every lit lantern drinks its own decay,
+            // and every drain shade sips from the lantern it sits at. Fuel lives in whole units of
+            // 1/60 of a fuel point, so a full tick is an exact integer and never drifts.
+            if (T.FuelDecayPerS > 0)
+            {
+                long decay = (long)Math.Round(T.FuelDecayPerS);       // points/s == units/tick at 60 fps
+                foreach (Lantern l in Lanterns) if (l.Lit) l.FuelUnits -= decay;
+            }
+            if (T.DrainPerS > 0)
+            {
+                long sip = (long)Math.Round(T.DrainPerS);             // points/s == units/tick at 60 fps
+                foreach (Lantern l in SortedLanterns())
+                {
+                    if (!l.Lit) continue;
+                    foreach (Shade s in SortedShades())
+                    {
+                        if (s.State != ShadeState.drain || s.TargetLanternId != l.Id) continue;
+                        l.FuelUnits -= sip;
+                        if (SimTick % 60 == 0)                        // the contract wants one line per minute of sipping
+                            Raise(new SimEvent(Tick, "fuel_drain")
+                                .Put("lantern_id", JsonValue.Str(l.Id))
+                                .Put("shade_id", JsonValue.Str(s.Id))
+                                .Put("fuel", JsonValue.Real(Math.Round(l.FuelUnits / (double)Tuning.FuelUnitsPerPoint, 1, MidpointRounding.AwayFromZero), 1)));
+                    }
+                }
+            }
+
+            // Immediately after step 2: a lantern whose tank ran dry goes out and remembers it shone.
+            foreach (Lantern l in SortedLanterns())
+            {
+                if (!l.Lit || l.FuelUnits > 0) continue;
+                l.Lit = false;
+                l.FuelUnits = 0;
+                l.Deposited = 0;          // the deposit is gone with the flame
+                l.EverLit = true;
+                Raise(new SimEvent(Tick, "lantern_out").Put("lantern_id", JsonValue.Str(l.Id)));
             }
         }
 
@@ -912,7 +997,7 @@ namespace DaoDenLong.Core
         private void Pickups()
         {
             if (Player.FallWaitTicks > 0) return;
-            if (Player.Carried >= T.CarryCapacity) return;
+            if (Player.Carried >= CapacityNow()) return;
             foreach (Mote m in SortedMotes())
             {
                 if (m.SpawnTick == SimTick) continue;
@@ -921,7 +1006,7 @@ namespace DaoDenLong.Core
                 Motes.Remove(m);
                 Player.Carried++;
                 Raise(new SimEvent(Tick, "mote_picked").Put("carried", JsonValue.Int(Player.Carried)));
-                if (Player.Carried >= T.CarryCapacity) break;
+                if (Player.Carried >= CapacityNow()) break;
             }
 
             // Bùa Gió: picked up by the same rules as a mote, id order, from the tick after it appears.
@@ -945,14 +1030,36 @@ namespace DaoDenLong.Core
             Lantern best = null; double bestD = double.MaxValue;
             foreach (Lantern l in Lanterns)
             {
-                if (l.Lit) continue;                                        // a lit lantern takes nothing more
+                // v1.2: selection sees unlit lanterns AND lit ones that can still take fuel;
+                // a lit lantern at full fuel is not selectable at all - no event, no score.
+                if (l.Lit && l.FuelUnits >= T.FuelMax * Tuning.FuelUnitsPerPoint) continue;
                 double d = V3.DistXZ(Player.Pos, l.Pos);
                 if (d > T.InteractRadius) continue;
                 if (d < bestD - 1e-9 || (Math.Abs(d - bestD) <= 1e-9 && (best == null || string.CompareOrdinal(l.Id, best.Id) < 0)))
                 { best = l; bestD = d; }
             }
             if (best == null || Player.Carried <= 0) return;
-            int give = Math.Min(Player.Carried, best.Cost - best.Deposited);
+
+            long per = T.FuelPerMote * Tuning.FuelUnitsPerPoint;   // one mote, in fuel units
+            long full = T.FuelMax * Tuning.FuelUnitsPerPoint;
+            if (best.Lit)
+            {
+                // v1.2 top-up: every mote poured in adds ten fuel points, never over the maximum.
+                long need = (full - best.FuelUnits + per - 1) / per;      // ceil, in whole motes
+                int used = Math.Min(Player.Carried, (int)need);
+                if (used <= 0) return;                                    // never happens: full ones are not selectable
+                Player.Carried -= used;
+                best.FuelUnits = Math.Min(full, best.FuelUnits + used * per);
+                Score += used * T.ScorePerMote;
+                Raise(new SimEvent(Tick, "refuel")
+                    .Put("lantern_id", JsonValue.Str(best.Id))
+                    .Put("amount", JsonValue.Int(used))
+                    .Put("fuel", JsonValue.Real(Math.Round(best.FuelUnits / (double)Tuning.FuelUnitsPerPoint, 1, MidpointRounding.AwayFromZero), 1)));
+                return;
+            }
+
+            long cost = best.EverLit ? T.RelightCost : best.Cost;      // v1.2: a lantern that has shone asks for five
+            int give = (int)Math.Min(Player.Carried, cost - best.Deposited);
             if (give <= 0) return;
             Player.Carried -= give;
             best.Deposited += give;
@@ -961,11 +1068,18 @@ namespace DaoDenLong.Core
                 .Put("lantern_id", JsonValue.Str(best.Id))
                 .Put("amount", JsonValue.Int(give))
                 .Put("deposited", JsonValue.Int(best.Deposited)));
-            if (best.Deposited >= best.Cost)
+            if (best.Deposited >= cost)
             {
+                bool relight = best.EverLit;
                 best.Lit = true;
-                Score += T.ScorePerLantern;
-                Raise(new SimEvent(Tick, "lantern_lit").Put("lantern_id", JsonValue.Str(best.Id)));
+                best.EverLit = true;
+                if (relight) best.RelitCount++;                     // v1.2: the counter the snapshot prints
+                Player.SuccessfulLights++;                          // v1.2: and the counter the capacity grows with
+                best.FuelUnits = full;                              // a fresh light burns full
+                Score += relight ? T.ScorePerRelight : T.ScorePerLantern;
+                Raise(new SimEvent(Tick, "lantern_lit")
+                    .Put("lantern_id", JsonValue.Str(best.Id))
+                    .Put("relight", JsonValue.Bool(relight)));
             }
         }
 
@@ -978,7 +1092,7 @@ namespace DaoDenLong.Core
                 if (s.PushTicksLeft > 0) continue;    // a push already on its way keeps its own pace to the edge
                 foreach (Lantern l in Lanterns)
                 {
-                    if (!l.Lit) continue;
+                    if (!HasZone(l)) continue;                          // v1.2: only a lantern with fuel keeps its zone
                     double d = V3.DistXZ(s.Pos, l.Pos);
                     if (d >= T.SafeRadius - 1e-9) continue;
                     // A shade caught inside when the light comes on is pushed to the edge, without damage.
@@ -1006,6 +1120,7 @@ namespace DaoDenLong.Core
             {
                 if (s.SpawnTick == SimTick) continue;
                 if (V3.Dist(centre, s.Pos) > T.PulseRadius) continue;    // 3D distance to the shade centre
+                bool wasDrain = s.State == ShadeState.drain;            // v1.2: a shade caught sipping is worth more
                 s.State = ShadeState.stunned;
                 s.StateTicksLeft = T.PulseStunTicks;
                 s.PushLeft = T.PulsePushM;
@@ -1013,7 +1128,7 @@ namespace DaoDenLong.Core
                 V3 dir = DirTo(centre, s.Pos);
                 if (dir.X == 0 && dir.Z == 0) { s.PushDirX = 1; s.PushDirZ = 0; }   // same spot: push along +X
                 else { s.PushDirX = dir.X; s.PushDirZ = dir.Z; }
-                Score += T.ScorePerStun;
+                Score += wasDrain ? T.ScorePerStunDrain : T.ScorePerStun;
                 ids.Add(JsonValue.Str(s.Id));
             }
             Raise(new SimEvent(Tick, "pulse").Put("stunned_ids", ids));
@@ -1070,6 +1185,19 @@ namespace DaoDenLong.Core
                 if (s.State == ShadeState.stunned) continue;          // held still by the light
 
                 double d = V3.DistXZ(s.Pos, Player.Pos);
+
+                // v1.2 (Ticket-03): a drain shade stands at its weak lantern and sips; the siphon
+                // itself ran in step 2. It leaves when Mây comes close, or when the lantern is gone,
+                // back above the line, or out of reach.
+                if (s.State == ShadeState.drain)
+                {
+                    Lantern dl = LanternById(s.TargetLanternId);
+                    double dlat = dl == null ? double.MaxValue : V3.DistXZ(s.Pos, dl.Pos);
+                    if (d <= T.DrainChaseRange) s.State = ShadeState.chase;
+                    else if (dl == null || !dl.Lit || dl.FuelUnits >= ZoneFuelUnits() || dlat > T.LowFuelWalkMax + 1e-9) s.State = ShadeState.wander;
+                    else continue;                                     // still sipping: it stands where it is
+                }
+
                 if (s.State == ShadeState.chase)
                 {
                     if (d > T.DetachRange) s.State = ShadeState.wander;
@@ -1078,13 +1206,21 @@ namespace DaoDenLong.Core
 
                 double baseSpeed = ShadeSpeedForNight();
                 double speed = s.State == ShadeState.chase ? baseSpeed : baseSpeed * 0.5;
-                V3 dir = s.State == ShadeState.chase ? DirTo(s.Pos, Player.Pos) : WanderDir(s);
+                V3 dir;
+                if (s.State == ShadeState.chase) dir = DirTo(s.Pos, Player.Pos);
+                else
+                {
+                    Lantern weak = NearestWeakLantern(s.Pos);           // v1.2: the wander path leads to the weak light
+                    if (weak != null && V3.DistXZ(s.Pos, weak.Pos) <= T.LowFuelWalkMax + 1e-9)
+                    { s.State = ShadeState.drain; s.TargetLanternId = weak.Id; continue; }   // arrived: it stands, and sips
+                    dir = weak != null ? DirTo(s.Pos, weak.Pos) : WanderDir(s);
+                }
                 V3 next = new V3(s.Pos.X + dir.X * speed / TicksPerSecond, s.Pos.Y, s.Pos.Z + dir.Z * speed / TicksPerSecond);
 
                 // The safe radius blocks movement: a shade is stopped at the edge of the light.
                 foreach (Lantern l in Lanterns)
                 {
-                    if (!l.Lit) continue;
+                    if (!HasZone(l)) continue;                          // v1.2: only a lantern with fuel keeps its zone
                     double nd = V3.DistXZ(next, l.Pos);
                     if (nd >= T.SafeRadius - 1e-9) continue;
                     V3 away = DirTo(l.Pos, next);
@@ -1304,10 +1440,14 @@ namespace DaoDenLong.Core
         private void CheckEnd()
         {
             if (Player.Flames <= 0) { End(false, "no_flames"); return; }     // always a loss, checked first
-            bool allLit = Lanterns.Count > 0;
-            foreach (Lantern l in Lanterns) if (!l.Lit) { allLit = false; break; }
-            if (allLit) { End(true, "all_lit"); return; }
-            if (TimeLeftS <= 0.0) { End(false, "dawn"); return; }            // Phase 1 assumption, see docs/notes
+            // v1.2 (Ticket-03): no early win any more. The Night runs its full length and Mây
+            // wins only by being alive at dawn with at least 60% of the lanterns lit.
+            if (TimeLeftS > 0.0) return;
+            long lit = 0;
+            foreach (Lantern l in Lanterns) if (l.Lit) lit++;
+            long need = (long)Math.Ceiling(T.WinRatio * Lanterns.Count);      // 0.6 x 5 = 2.999... -> 3, as the ticket spells it
+            if (lit >= need) End(true, "dawn_survived");
+            else End(false, "dawn");
         }
 
         private void End(bool won, string reason)
@@ -1318,7 +1458,11 @@ namespace DaoDenLong.Core
             if (won && !_bonusApplied)
             {
                 _bonusApplied = true;
-                Score += (long)Math.Floor(TimeLeftS) * T.ScorePerSecondLeft + Player.Flames * T.ScorePerFlameLeft;
+                // v1.2: the time bonus is gone. The dawn bonus is paid only on a win at dawn:
+                // per lit lantern +50 plus floor(fuel), plus +50 per flame left.
+                foreach (Lantern l in Lanterns)
+                    if (l.Lit) Score += T.ScorePerDawnLantern + l.FuelUnits / Tuning.FuelUnitsPerPoint * T.ScorePerDawnFuelPoint;
+                Score += Player.Flames * T.ScorePerFlameLeft;
             }
             Raise(new SimEvent(Tick, "game_over")
                 .Put("result", JsonValue.Str(State))
@@ -1370,6 +1514,43 @@ namespace DaoDenLong.Core
             List<Lantern> l = new List<Lantern>(Lanterns);
             l.Sort((a, b) => NaturalCompare(a.Id, b.Id));
             return l;
+        }
+
+        // ---- v1.2 helpers (Ticket-03).
+
+        /// <summary>Carry cap: 10 + 2 per successful lighting during this Night, up to the ceiling.</summary>
+        private long CapacityNow()
+        {
+            long c = T.CarryCapacity + 2 * Player.SuccessfulLights;
+            return c > T.CapacityMax ? T.CapacityMax : c;
+        }
+
+        /// <summary>Fuel units at which a lantern keeps its safe zone (exactly 30 keeps it).</summary>
+        private long ZoneFuelUnits() { return T.LowFuelThreshold * Tuning.FuelUnitsPerPoint; }
+
+        /// <summary>True when this lantern's light still counts as a safe zone: lit and not below the line.</summary>
+        private bool HasZone(Lantern l) { return l.Lit && l.FuelUnits >= ZoneFuelUnits(); }
+
+        /// <summary>The lantern with this id, or null. (v1.2)</summary>
+        private Lantern LanternById(string id)
+        {
+            if (id == null) return null;
+            foreach (Lantern l in Lanterns) if (l.Id == id) return l;
+            return null;
+        }
+
+        /// <summary>The nearest lit lantern under the low-fuel line (tie -> smaller id), or null.</summary>
+        private Lantern NearestWeakLantern(V3 from)
+        {
+            Lantern best = null; double bestD = double.MaxValue;
+            foreach (Lantern l in Lanterns)
+            {
+                if (!l.Lit || l.FuelUnits >= ZoneFuelUnits()) continue;
+                double d = V3.DistXZ(from, l.Pos);
+                if (d < bestD - 1e-9 || (Math.Abs(d - bestD) <= 1e-9 && (best == null || string.CompareOrdinal(l.Id, best.Id) < 0)))
+                { best = l; bestD = d; }
+            }
+            return best;
         }
 
         private static int NaturalCompare(string a, string b)

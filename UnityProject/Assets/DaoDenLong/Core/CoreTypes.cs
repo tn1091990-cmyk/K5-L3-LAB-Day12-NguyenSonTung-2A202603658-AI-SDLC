@@ -56,8 +56,9 @@ namespace DaoDenLong.Core
         public int Next(int n) { return n <= 0 ? 0 : (int)(NextUInt64() % (ulong)n); }
     }
 
-    /// <summary>v1.1 state names exactly as the board spells them. spawning lasts until the shade's first processed tick.</summary>
-    public enum ShadeState { spawning, wander, chase, recoil, stunned }
+    /// <summary>v1.1 state names exactly as the board spells them. spawning lasts until the shade's first processed tick.
+    /// drain joins the list in v1.2 (Ticket-03): a shade sipping the oil of a low-fuel lantern.</summary>
+    public enum ShadeState { spawning, wander, chase, recoil, stunned, drain }
 
     public sealed class Shade
     {
@@ -66,6 +67,7 @@ namespace DaoDenLong.Core
         public double Hover = 1.0;  // hover height above ground; the physics point is the centre
         public ShadeState State = ShadeState.wander;
         public int StateTicksLeft;
+        public string TargetLanternId;  // v1.2: the weak lantern this shade is draining (scenario-settable too)
         public double DetachDist = 18.0;
         public double PushLeft;     // metres still to push during the first ticks of a stun
         public int PushTicksLeft;
@@ -89,6 +91,7 @@ namespace DaoDenLong.Core
         public int PulseCdTicks;
         public int FallWaitTicks;   // > 0 while waiting to respawn: no pickup, no hits
         public double FacingDeg;
+        public int SuccessfulLights; // v1.2: successful lightings during this Night (relights count), drives capacity
 
         // Phase 2 (v1.1): dash and the Bùa Gió charm.
         public int DashCdTicks;     // cooldown counted from the moment the dash starts
@@ -115,6 +118,10 @@ namespace DaoDenLong.Core
         public bool Lit;
         public int Deposited;       // motes delivered to this lantern
         public int Cost;            // motes needed to light it
+        // v1.2 (Ticket-03): the oil tank, in whole units of 1/60 fuel point (see Simulation.Tuning).
+        public long FuelUnits;      // exact: decay 1 unit/tick, drain 5 units/tick
+        public bool EverLit;        // has ever shone this Night: relights are cheaper and score less
+        public int RelitCount;      // successful relightings during this Night
     }
 
     /// <summary>Gió Lạc, the wandering wind (v1.1, Nights 2-3). Reference point: its flying body.</summary>
@@ -224,6 +231,8 @@ namespace DaoDenLong.Core
         public bool HasPos; public V3 Pos;
         public bool HasLit; public bool Lit;
         public bool HasDeposited; public int Deposited;
+        public bool HasFuel; public double Fuel;          // v1.2: fuel points; a lit lantern without it defaults to full
+        public bool HasEverLit; public bool EverLit;      // v1.2
     }
 
     /// <summary>One shade entry of a scenario file.</summary>
@@ -233,6 +242,7 @@ namespace DaoDenLong.Core
         public V3 Pos;
         public bool HasState; public ShadeState State;   // v1.1
         public bool HasStateTicksLeft; public int StateTicksLeft;
+        public bool HasTarget; public string TargetLanternId;   // v1.2: a drain shade's lantern
     }
 
     /// <summary>One drifter entry of a scenario file (v1.1): replaces the default drifter list.</summary>
@@ -267,6 +277,7 @@ namespace DaoDenLong.Core
         // Test Contract v1.1: setup counters, the new lists and the two flags.
         public bool HasPlayerTicks;
         public int PlayerInvulnTicks, PlayerDashCdTicks, PlayerPulseCdTicks, PlayerCharmTicks;
+        public bool HasPlayerSuccessfulLights; public int PlayerSuccessfulLights;   // v1.2
         public bool HasRandomDrifters, HasWindEnabled;  // a flag is only applied when the key is present
         public bool RandomDrifters = true, WindEnabled;
         public bool HasDrifters, HasCharms;

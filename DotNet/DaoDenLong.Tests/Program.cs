@@ -37,20 +37,25 @@ namespace DaoDenLong.Tests
                 ("T08 shade hit: -1 flame, drop floor(carried/2) in ring, invuln 90, recoil", T08_ShadeHit),
                 ("T09 safe zone: shade inside pushed to 6 m edge within 30 ticks, no damage", T09_SafeZone),
                 ("T10 fall off island: one penalty, motes lost, 60-tick wait, respawn", T10_FallOffIsland),
-                ("T11 win/lose order: no_flames first, all_lit beats dawn, score formula", T11_WinLose),
+                ("T11 win/lose order: no_flames first, no early win, dawn_survived (v1.2)", T11_WinLose),
                 ("T12 spawns: motes 240/480/720, two shades at 300, ids in birth order", T12_SpawnSchedule),
                 ("T13 input semantics: defaults, sticky fields, edges, strict tick order", T13_InputSemantics),
                 ("T14 malformed scenario/inputs are rejected (exit code 2 path)", T14_MalformedInput),
-                ("T15 output shape: JSONL lines, 3-decimal coords, early stop, end line last", T15_OutputShape),
+                ("T15 output shape: JSONL lines, 3-decimal coords, no early stop (v1.2), end line last", T15_OutputShape),
                 ("T16 snapshot ids in natural order (S1 < S2 < S10)", T16_NaturalIdOrder),
                 ("T17 dash: 14 m/s x 12 ticks, cooldown 90 from the start, air dash keeps altitude", T17_Dash),
                 ("T18 pause: tick advances, sim frozen, snapshot says paused, resume works", T18_Pause),
-                ("T19 contract v1.1: new tuning keys, new snapshot fields, new format rejections", T19_ContractV11),
+                ("T19 contract v1.2: new tuning keys, new snapshot fields, format rejections", T19_ContractV11),
                 ("T20 multi-night: per-night schedules, clocks, night_start line", T20_MultiNight),
                 ("T21 jump pads: launch velocity kept until landing; keys do not override; dash does", T21_JumpPads),
                 ("T22 drifters: steal once, flee 240, pulse-flee, pulse-drop, vanish", T22_Drifters),
                 ("T23 charm: pickup, 7.2 m/s, dash off cooldown, expiry, respawn cycle", T23_Charm),
                 ("T24 wind (Night 3): gust windows, seeded direction, deterministic drift", T24_Wind),
+                ("T25 fuel (v1.2): top-up math, relight costs 5, refuel scores +5", T25_Fuel),
+                ("T26 drain (v1.2): walk-in, drain events every 60, lantern out, push-out", T26_Drain),
+                ("T27 win rules (v1.2): no early win, dawn threshold, dawn_survived", T27_WinRules),
+                ("T28 capacity (v1.2): +2 per successful light, capped at 20", T28_CapacityScale),
+                ("T29 v1.2 fields: scenario fuel/ever_lit/drain-target round-trip", T29_FieldsV12),
             };
 
             foreach (var (name, body) in tests)
@@ -155,6 +160,32 @@ namespace DaoDenLong.Tests
             var sb = new StringBuilder();
             foreach (JsonValue l in lines) sb.Append(l.Serialize()).Append('\n');
             return sb.ToString();
+        }
+
+        // Value-for-value tree compare (numbers by value, key order included) so the contract
+        // file and the core's own tuning print can be checked against each other.
+        private static bool SameTree(JsonValue a, JsonValue b)
+        {
+            if (a == null || b == null) return a == null && b == null;
+            switch (a.Type)
+            {
+                case JsonValue.Kind.Obj:
+                    if (b.Type != JsonValue.Kind.Obj || a.Members.Count != b.Members.Count) return false;
+                    for (int i = 0; i < a.Members.Count; i++)
+                        if (a.Members[i].Key != b.Members[i].Key) return false;   // the ladder pins the order
+                    for (int i = 0; i < a.Members.Count; i++)
+                        if (!SameTree(a.Members[i].Value, b.Members[i].Value)) return false;
+                    return true;
+                case JsonValue.Kind.NumInt:
+                    return (b.Type == JsonValue.Kind.NumInt && a.I == b.I)
+                        || b.Type == JsonValue.Kind.NumReal && Math.Abs(a.I - b.D) < 1e-9;
+                case JsonValue.Kind.NumReal:
+                    return (b.Type == JsonValue.Kind.NumReal && Math.Abs(a.D - b.D) < 1e-9)
+                        || b.Type == JsonValue.Kind.NumInt && Math.Abs(a.D - b.I) < 1e-9;
+                case JsonValue.Kind.Str: return b.Type == JsonValue.Kind.Str && a.S == b.S;
+                case JsonValue.Kind.Bool: return b.Type == JsonValue.Kind.Bool && a.B == b.B;
+                default: return false;
+            }
         }
 
         // ---- tests ------------------------------------------------------------
@@ -282,8 +313,9 @@ namespace DaoDenLong.Tests
             List<JsonValue> lit = EventsNamed(lines, "lantern_lit");
             AssertEq(lit.Count, 1, "L1 lights up");
             AssertEq(T(lit[0].Get("data").Get("lantern_id")), "L1", "lit lantern id");
-            // Score: 10 motes * 10 + 100 for lighting.
-            AssertEq(SnapAt(lines, 2).Get("score").I, 200, "score after deposit + light");
+            // Score: 10 motes * 5 + 100 for lighting. (v1.2: Ticket-03's score table prices a mote
+            // at +5, replacing the old +10 - this pinned value updated with reason, not silently.)
+            AssertEq(SnapAt(lines, 2).Get("score").I, 150, "score after deposit + light");
 
             // Partial deposit: the lantern remembers progress (8 stored + 1 carried = 9/10).
             lines = Run(5, "{\"player\":{\"carried\":1},\"random_motes\":false,\"random_shades\":false,\"lanterns\":[{\"id\":\"L1\",\"pos\":[0,0,2],\"deposited\":8}]}", inp, 2, 1);
@@ -294,8 +326,8 @@ namespace DaoDenLong.Tests
             AssertEq(l1.Get("deposited").I, 9, "progress 8 + 1 carried");
             AssertEq(B(l1.Get("lit")) ? 1 : 0, 0, "not lit at 9/10");
             AssertEq(EventsNamed(lines, "lantern_lit").Count, 0, "no lantern_lit event below cost");
-            // Only the carried mote scores (+10); the stored 8 came from the scenario setup.
-            AssertEq(s1.Get("score").I, 10, "score for one deposited mote");
+            // Only the carried mote scores (+5 under v1.2's table); the stored 8 came from the scenario setup.
+            AssertEq(s1.Get("score").I, 5, "score for one deposited mote");
 
             // Out of interact range (2.01 m) -> nothing happens.
             lines = Run(5, "{\"player\":{\"carried\":3},\"random_motes\":false,\"random_shades\":false,\"lanterns\":[{\"id\":\"L1\",\"pos\":[0,0,2.01]}]}", inp, 2, 1);
@@ -469,23 +501,18 @@ namespace DaoDenLong.Tests
 
         private static void T11_WinLose()
         {
-            // Win by all_lit: light the last lantern this step, the other four were lit by
-            // the scenario (no score there). Score = 10 motes*10 + 100 + floor(t)*2 + 50*flames.
+            // v1.2: lighting the last lantern no longer ends the Night early - the win now runs
+            // on the full duration. (Pinned block rewritten with reason: Ticket-03 replaces
+            // "win immediately when all lit".) Score = 10 motes*5 + 100 first light, no dawn bonus yet.
             const string scWin = "{\"player\":{\"carried\":10},\"random_motes\":false,\"random_shades\":false,\"lanterns\":[{\"id\":\"L1\",\"pos\":[0,0,1.5],\"deposited\":0},{\"id\":\"L2\",\"lit\":true},{\"id\":\"L3\",\"lit\":true},{\"id\":\"L4\",\"lit\":true},{\"id\":\"L5\",\"lit\":true}]}";
             const string inpP = "{\"frames\":[{\"tick\":0,\"interact\":true}]}";
             List<JsonValue> lines = Run(21, scWin, inpP, 3, 1);
             List<JsonValue> end = OfType(lines, "end");
             AssertEq(end.Count, 1, "exactly one end line");
-            AssertEq(T(end[0].Get("state")), "won", "won on the lighting tick");
-            AssertEq(end[0].Get("ticks").I, 1, "the win happens in step 0");
-            double t = N(SnapAt(lines, 1).Get("time_left_s"));
-            AssertNear(t, 300.0 - 1.0 / 60.0, 1e-3, "time_left_s = duration - steps/60");
-            long expected = 100 + 100 + (long)Math.Floor(t) * 2 + 50 * 3;
-            AssertEq(end[0].Get("score").I, expected, "win score: motes + lantern + time bonus + flames");
-            List<JsonValue> go = EventsNamed(lines, "game_over");
-            AssertEq(go.Count, 1, "one game_over event");
-            AssertEq(T(go[0].Get("data").Get("result")), "won", "result won");
-            AssertEq(T(go[0].Get("data").Get("reason")), "all_lit", "reason all_lit");
+            AssertEq(T(end[0].Get("state")), "playing", "no early win on the lighting tick any more");
+            AssertEq(end[0].Get("ticks").I, 3, "the run uses all its ticks");
+            AssertEq(EventsNamed(lines, "game_over").Count, 0, "no game_over during the Night");
+            AssertEq(end[0].Get("score").I, 150, "score: 50 motes + 100 first light, no dawn bonus yet");
 
             // Loss on 0 flames wins the tie against all_lit (checked first): every lantern
             // is lit by the scenario and the shade contact drains the last flame in step 0.
@@ -506,15 +533,20 @@ namespace DaoDenLong.Tests
             AssertEq(end[0].Get("ticks").I, 3, "time_left crosses 0 during step 3");
             AssertEq(end[0].Get("score").I, 0, "no bonus on a dawn loss");
 
-            // Alive + all lit on the very tick time runs out -> still a win: the lighting
-            // lands in the same step where time_left crosses zero.
+            // Alive with 5/5 lit on the very tick time runs out -> won at dawn: the lighting
+            // lands in the same step where time_left crosses zero. (Pinned block rewritten with
+            // reason: Ticket-03 replaces the all_lit win - the reason is dawn_survived now, and
+            // the dawn bonus pays per lit lantern +50+floor(fuel) plus +50 per flame left.)
             const string scDawn = "{\"player\":{\"carried\":10},\"random_motes\":false,\"random_shades\":false,\"lanterns\":[{\"id\":\"L1\",\"pos\":[0,0,1.5]},{\"id\":\"L2\",\"lit\":true},{\"id\":\"L3\",\"lit\":true},{\"id\":\"L4\",\"lit\":true},{\"id\":\"L5\",\"lit\":true}],\"time_left_s\":0.016666666666666666}";
             lines = Run(21, scDawn, "{\"frames\":[{\"tick\":0,\"interact\":true}]}", 5, 1);
             end = OfType(lines, "end");
-            AssertEq(T(end[0].Get("state")), "won", "alive + all lit on the time-up tick -> won");
+            AssertEq(T(end[0].Get("state")), "won", "alive + 5/5 lit at the time-up tick -> won");
             AssertEq(end[0].Get("ticks").I, 1, "the winning step is step 0 -> tick 1");
-            AssertEq(T(EventsNamed(lines, "game_over")[0].Get("data").Get("reason")), "all_lit", "reason all_lit beats dawn");
+            AssertEq(T(EventsNamed(lines, "game_over")[0].Get("data").Get("reason")), "dawn_survived", "reason dawn_survived");
             AssertEq(EventsNamed(lines, "game_over")[0].Get("data").Get("reason") != null ? 1 : 0, 1, "game_over carries a reason");
+            // Score: 50 motes + 100 first light, then the dawn bonus: L1 lit this step is full
+            // (50+100), the four scenario lanterns decayed one tick (50+99 each), plus 3*50 flames.
+            AssertEq(end[0].Get("score").I, 150 + 150 + 4 * 149 + 150, "dawn bonus per the v1.2 table");
         }
 
         private static void T12_SpawnSchedule()
@@ -668,13 +700,17 @@ namespace DaoDenLong.Tests
             AssertEq(T(end.Get("state")), "playing", "state field on the end line");
             Assert(end.Has("score"), "the end line carries the score");
 
-            // Early stop: a win ends the run and the end line reports the win tick.
+            // v1.2: there is no early stop any more - lighting the last lantern does not end the
+            // run. (Pinned block rewritten with reason: Ticket-03 removed the all_lit win, so the
+            // run now uses all its ticks and snapshots keep coming.)
             List<JsonValue> shortRun = Run(51, "{\"player\":{\"carried\":10},\"random_motes\":false,\"random_shades\":false,\"lanterns\":[{\"id\":\"L1\",\"pos\":[0,0,1.5]},{\"id\":\"L2\",\"lit\":true},{\"id\":\"L3\",\"lit\":true},{\"id\":\"L4\",\"lit\":true},{\"id\":\"L5\",\"lit\":true}]}",
                 "{\"frames\":[{\"tick\":2,\"interact\":true}]}", 50, 5);
             end = OfType(shortRun, "end")[0];
-            AssertEq(end.Get("ticks").I, 3, "stopped the tick the game ended");
-            AssertEq(T(end.Get("state")), "won", "won");
-            AssertEq(OfType(shortRun, "snapshot").Count, 1, "no snapshots after the game ended");
+            AssertEq(end.Get("ticks").I, 50, "the run uses every tick - no early stop");
+            AssertEq(T(end.Get("state")), "playing", "the game is still playing at the end line");
+            AssertEq(OfType(shortRun, "snapshot").Count, 11, "snapshots at 0, 5, ... 50");
+            AssertEq(EventsNamed(shortRun, "lantern_lit").Count, 1, "the lighting still happened, mid-run");
+            AssertEq(EventsNamed(shortRun, "game_over").Count, 0, "no game_over during the run");
         }
 
         private static void CheckDecimals(JsonValue pos, string what)
@@ -773,7 +809,7 @@ namespace DaoDenLong.Tests
             AssertEq(SnapAt(lines, 5).Get("state").Text(""), "paused", "snapshot state during the pause");
             AssertEq(SnapAt(lines, 5).Get("sim_tick").I, 0, "sim clock frozen while the tick counter runs");
             AssertEq(SnapAt(lines, 5).Get("tick").I, 5, "tick counter keeps advancing");
-            AssertNear(SnapAt(lines, 5).Get("time_left_s").Num(0), 300.0, 1e-9, "time left frozen during the pause");
+            AssertNear(SnapAt(lines, 5).Get("time_left_s").Num(0), 240.0, 1e-9, "time left frozen during the pause (v1.2: Night 1 runs 240 s)");
 
             AssertEq(SnapAt(lines, 15).Get("state").Text(""), "playing", "playing again after resume");
             AssertEq(SnapAt(lines, 15).Get("sim_tick").I, 7, "seven steps ran after the resume (ticks 8..14)");
@@ -783,13 +819,39 @@ namespace DaoDenLong.Tests
 
         private static void T19_ContractV11()
         {
-            // The five new tuning keys, exactly as Ticket-02 spells them.
+            // The tuning keys, exactly as the ticket ladder spells them: v1.1's five (durations
+            // updated by Ticket-03) plus the eight new v1.2 keys appended after them.
             JsonValue t = Tuning.Standard().ToContractJson();
             AssertNear(t.Get("dash_speed").Num(0), 14.0, 1e-9, "dash_speed");
             AssertNear(t.Get("dash_duration_s").Num(0), 0.2, 1e-9, "dash_duration_s");
             AssertNear(t.Get("dash_cooldown_s").Num(0), 1.5, 1e-9, "dash_cooldown_s");
-            AssertEq(t.Get("night2_duration_s").I, 330, "night2_duration_s");
-            AssertEq(t.Get("night3_duration_s").I, 360, "night3_duration_s");
+            AssertEq(t.Get("night1_duration_s").I, 240, "night1_duration_s (v1.2)");
+            AssertEq(t.Get("night2_duration_s").I, 270, "night2_duration_s (v1.2)");
+            AssertEq(t.Get("night3_duration_s").I, 300, "night3_duration_s (v1.2)");
+            AssertEq(t.Get("fuel_max").I, 100, "fuel_max");
+            AssertNear(t.Get("fuel_decay_per_s").Num(0), 1.0, 1e-9, "fuel_decay_per_s");
+            AssertEq(t.Get("fuel_per_mote").I, 10, "fuel_per_mote");
+            AssertEq(t.Get("relight_cost").I, 5, "relight_cost");
+            AssertNear(t.Get("win_ratio").Num(0), 0.6, 1e-9, "win_ratio");
+            AssertEq(t.Get("drain_per_s").I, 5, "drain_per_s");
+            AssertEq(t.Get("low_fuel_threshold").I, 30, "low_fuel_threshold");
+            AssertEq(t.Get("capacity_max").I, 20, "capacity_max");
+            // The v1.2 score table (Ticket-03 replaces it): the old keys keep their slots with
+            // new values, the new bonus keys are appended.
+            AssertEq(t.Get("score").Get("per_mote").I, 5, "score per_mote (v1.2)");
+            AssertEq(t.Get("score").Get("per_lantern").I, 100, "score per_lantern");
+            AssertEq(t.Get("score").Get("per_stun").I, 5, "score per_stun");
+            AssertEq(t.Get("score").Get("per_second_left").I, 0, "score per_second_left: the time bonus is gone");
+            AssertEq(t.Get("score").Get("per_flame_left").I, 50, "score per_flame_left");
+            AssertEq(t.Get("score").Get("per_relight").I, 40, "score per_relight");
+            AssertEq(t.Get("score").Get("per_stun_drain").I, 15, "score per_stun_drain");
+            AssertEq(t.Get("score").Get("per_dawn_lantern").I, 50, "score per_dawn_lantern");
+            AssertEq(t.Get("score").Get("per_dawn_fuel").I, 1, "score per_dawn_fuel");
+            // The published contract file must carry exactly this tuning object - key order
+            // included, numbers compared by value because the two sides format differently.
+            string contractFile = System.IO.File.ReadAllText(
+                System.IO.Path.Combine(System.AppContext.BaseDirectory, "..", "..", "..", "..", "..", "game.contract.json"));
+            Assert(SameTree(JsonValue.Parse(contractFile).Get("tuning"), t), "game.contract.json matches the core");
 
             // A scenario may set the new player counters; the snapshot reports them and the new fields.
             string sc = "{\"player\":{\"pos\":[0,0,0],\"carried\":0,\"flames\":3,\"invuln_ticks\":30,\"dash_cd_ticks\":20,\"pulse_cd_ticks\":40,\"charm_ticks\":50}," +
@@ -835,7 +897,7 @@ namespace DaoDenLong.Tests
             List<JsonValue> n2ev = OfType(n2, "event");
             AssertEq(T(n2ev[0].Get("name")), "night_start", "night_start leads the file");
             AssertEq(n2ev[0].Get("data").Get("night").I, 2, "night 2 announced");
-            AssertNear(SnapAt(n2, 0).Get("time_left_s").Num(-1), 330.0, 1e-9, "night 2 clock");
+            AssertNear(SnapAt(n2, 0).Get("time_left_s").Num(-1), 270.0, 1e-9, "night 2 clock (v1.2)");
             AssertIds(SnapAt(n2, 0).Get("charms"), "C1");
             AssertNear(Axis(SnapAt(n2, 0).Get("charms").Arr_[0].Get("pos"), 0), 35.0, 1e-9, "charm C1 sits on the bridge");
             // Shade schedule to tick 1210: 300, 300, 720, 1140 — the 420-tick interval, no drift before it.
@@ -852,7 +914,7 @@ namespace DaoDenLong.Tests
             // Night 3: 360 s clock, shade interval 360, two charms, wind channel open.
             List<JsonValue> n3 = Run(21, quiet, null, 1210, 1210, 3);
             AssertEq(OfType(n3, "event")[0].Get("data").Get("night").I, 3, "night 3 announced");
-            AssertNear(SnapAt(n3, 0).Get("time_left_s").Num(-1), 360.0, 1e-9, "night 3 clock");
+            AssertNear(SnapAt(n3, 0).Get("time_left_s").Num(-1), 300.0, 1e-9, "night 3 clock (v1.2)");
             var n3sh = EventsNamed(n3, "shade_spawned");
             AssertEq(n3sh.Count, 4, "night 3 shade schedule: 300, 300, 660, 1020");
             AssertEq(n3sh[2].Get("tick").I, 660, "night 3 shade interval is 360 ticks");
@@ -1018,6 +1080,257 @@ namespace DaoDenLong.Tests
             Assert(Math.Abs(NormalizeDeg(Math.Atan2(dzEnd, dxEnd) * 180.0 / Math.PI) - SnapAt(b, 2200).Get("wind").Get("dir_deg").Num(-1000.0)) < 1.5, "the full leg follows the second draw");
 
             AssertEq(Serialize(Run(13, on, null, 2200, 200, 3)), Serialize(b), "the gust draws are deterministic per seed");
+        }
+
+        // ---- Phase 3: fuel, drain, new win rules, capacity (TICKET-03 / contract v1.2) --
+
+        private static void T25_Fuel()
+        {
+            // Top-up at a lit lantern: used = min(carried, ceil(need/10)). Fuel 20.0 decayed one
+            // tick (step 2 runs before Interact) -> need 48.0166/10 -> 9 motes, fuel caps at 100.0.
+            List<JsonValue> lines = Run(61,
+                "{\"player\":{\"carried\":10},\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[]," +
+                "\"lanterns\":[{\"id\":\"L1\",\"pos\":[0,0,1.5],\"lit\":true,\"fuel\":20.0}]}",
+                "{\"frames\":[{\"tick\":0,\"interact\":true}]}", 2, 1);
+            List<JsonValue> rf = EventsNamed(lines, "refuel");
+            AssertEq(rf.Count, 1, "one refuel for the press");
+            AssertEq(rf[0].Get("tick").I, 1, "refuel stamps the step it runs in");
+            AssertEq(T(rf[0].Get("data").Get("lantern_id")), "L1", "refuel lantern id");
+            AssertEq(rf[0].Get("data").Get("amount").I, 9, "used = ceil((100-99.9834/... )/10) = 9 motes");
+            Assert(SnapAt(lines, 2).Get("player").Get("carried") != null, "player ref present");
+            AssertEq(SnapAt(lines, 2).Get("player").Get("carried").I, 1, "10 - 9 motes");
+            AssertNear(N(SnapAt(lines, 2).Get("lanterns").Arr_[0].Get("fuel")), 100.0, 1e-9, "top-up caps at fuel_max");
+            AssertEq(SnapAt(lines, 2).Get("score").I, 45, "each topped mote scores +5");
+
+            // Relight: a lantern that has ever been lit asks only for 5 motes and scores +40.
+            lines = Run(61,
+                "{\"player\":{\"carried\":5},\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[]," +
+                "\"lanterns\":[{\"id\":\"L1\",\"pos\":[0,0,1.5],\"ever_lit\":true}]}",
+                "{\"frames\":[{\"tick\":0,\"interact\":true}]}", 2, 1);
+            List<JsonValue> dep = EventsNamed(lines, "deposit");
+            AssertEq(dep.Count, 1, "one deposit event for the press");
+            AssertEq(dep[0].Get("data").Get("deposited").I, 5, "all five motes go in (relight cost 5)");
+            List<JsonValue> lit = EventsNamed(lines, "lantern_lit");
+            AssertEq(lit.Count, 1, "the lantern lights up");
+            AssertEq(lit[0].Get("tick").I, 1, "lighting stamp");
+            Assert(B(lit[0].Get("data").Get("relight")), "lantern_lit carries relight: true");
+            JsonValue l1 = SnapAt(lines, 2).Get("lanterns").Arr_[0];
+            Assert(B(l1.Get("lit")), "lit after relight");
+            AssertEq(l1.Get("fuel").Num(0) == 100.0 ? 1 : 0, 1, "relit lantern starts at full fuel");
+            AssertEq(l1.Get("relit_count").I, 1, "relit_count counts relights");
+            AssertEq(SnapAt(lines, 2).Get("player").Get("carried").I, 0, "carried spent");
+            AssertEq(SnapAt(lines, 2).Get("score").I, 25 + 40, "5 motes x 5 + 40 relight");
+            AssertEq(SnapAt(lines, 2).Get("player").Get("capacity").I, 12, "capacity grew with the successful relight");
+
+            // A lantern topped to the cap on a later step: one mote lifts the tick of decay and
+            // pays exactly one +5; a truly full lantern would not be selectable at all.
+            lines = Run(61,
+                "{\"player\":{\"carried\":1},\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[]," +
+                "\"lanterns\":[{\"id\":\"L1\",\"pos\":[0,0,1.5],\"lit\":true}]}",
+                "{\"frames\":[{\"tick\":0,\"interact\":true}]}", 2, 1);
+            rf = EventsNamed(lines, "refuel");
+            AssertEq(rf.Count, 1, "one mote tops up a lantern a tick of decay short");
+            AssertEq(rf[0].Get("data").Get("amount").I, 1, "used = 1");
+            AssertEq(SnapAt(lines, 2).Get("score").I, 5, "+5 for the mote");
+            AssertEq(SnapAt(lines, 2).Get("player").Get("carried").I, 0, "carried spent");
+        }
+
+        private static void T26_Drain()
+        {
+            // A wander shade walks to the nearest lantern under the threshold (it may cross the
+            // 6 m ring - the low-fuel lantern has lost its safe zone), enters drain within 2 m,
+            // stands and sucks 5 fuel/s; a fuel_drain line lands every 60 ticks; the lantern
+            // dies at 0 and the event order is drain-lines-then-lantern_out.
+            List<JsonValue> lines = Run(63,
+                "{\"random_motes\":false,\"motes\":[],\"random_shades\":false," +
+                "\"shades\":[{\"id\":\"S1\",\"pos\":[34,0,0],\"state\":\"wander\"}]," +
+                "\"lanterns\":[{\"id\":\"L1\",\"pos\":[30,0,0],\"lit\":true,\"fuel\":29.0}]}",
+                null, 360, 30);
+            AssertNear(N(SnapAt(lines, 0).Get("lanterns").Arr_[0].Get("fuel")), 29.0, 1e-9, "scenario fuel");
+            AssertEq(T(SnapAt(lines, 30).Get("shades").Arr_[0].Get("state")), "wander", "still walking at snapshot 30");
+            AssertNear(Axis(SnapAt(lines, 30).Get("shades").Arr_[0].Get("pos"), 0), 33.0, 2e-3,
+                "one metre of pinned half-speed wander, inside the ring the low-fuel lantern lost");
+            AssertEq(T(SnapAt(lines, 60).Get("shades").Arr_[0].Get("state")), "wander", "the 2 m line is reached during step 60, after snapshot 60");
+            AssertNear(Axis(SnapAt(lines, 60).Get("shades").Arr_[0].Get("pos"), 0), 32.0, 2e-3, "the entry distance is measured before the step moves");
+            AssertEq(T(SnapAt(lines, 90).Get("shades").Arr_[0].Get("state")), "drain", "drain from the step it stood under the lantern");
+            AssertNear(Axis(SnapAt(lines, 90).Get("shades").Arr_[0].Get("pos"), 0), 32.0, 2e-3, "drain stands, no movement");
+            List<JsonValue> fd = EventsNamed(lines, "fuel_drain");
+            AssertEq(fd.Count, 4, "one line per 60 ticks after the first sip at step 61");
+            long[] fdTicks = { 120, 180, 240, 300 };
+            double[] fdFuel = { 22.1, 16.1, 10.1, 4.1 };   // the beat prints the tank at the top of the minute, entry at step 60
+            for (int i = 0; i < 4; i++)
+            {
+                AssertEq(fd[i].Get("tick").I, fdTicks[i], "fuel_drain stamp");
+                AssertEq(T(fd[i].Get("data").Get("lantern_id")), "L1", "fuel_drain lantern id");
+                AssertEq(T(fd[i].Get("data").Get("shade_id")), "S1", "fuel_drain shade id");
+                AssertEq(Math.Round(N(fd[i].Get("data").Get("fuel")), 1) == fdFuel[i] ? 1 : 0, 1, "fuel_drain fuel");
+            }
+            List<JsonValue> outev = EventsNamed(lines, "lantern_out");
+            AssertEq(outev.Count, 1, "fuel 0 -> the lantern goes out");
+            AssertEq(outev[0].Get("tick").I, 341, "the tank runs dry during step 340, the event lands on 341");
+            AssertEq(T(outev[0].Get("data").Get("lantern_id")), "L1", "lantern_out lantern id");
+            JsonValue dead = SnapAt(lines, 360).Get("lanterns").Arr_[0];
+            Assert(B(dead.Get("lit")) == false, "out stays out");
+            AssertEq(Math.Round(N(dead.Get("fuel")), 1) == 0.0 ? 1 : 0, 1, "fuel prints as 0.0 when out");
+            Assert(B(dead.Get("ever_lit")), "the lantern remembers it was lit");
+            AssertEq(dead.Get("deposited").I, 0, "deposited resets to 0");
+            AssertEq(T(SnapAt(lines, 360).Get("shades").Arr_[0].Get("state")), "wander",
+                "the shade goes back to wander the moment the lantern dies");
+
+            // Multiple shades stack on the same lantern: two drain lines land on one stamp.
+            lines = Run(63,
+                "{\"random_motes\":false,\"motes\":[],\"random_shades\":false," +
+                "\"shades\":[{\"id\":\"S1\",\"pos\":[31,0,0],\"state\":\"drain\",\"target_lantern_id\":\"L1\"}," +
+                "{\"id\":\"S2\",\"pos\":[29,0,0],\"state\":\"drain\",\"target_lantern_id\":\"L1\"}]," +
+                "\"lanterns\":[{\"id\":\"L1\",\"pos\":[30,0,0],\"lit\":true,\"fuel\":25.0}]}",
+                null, 61, 61);
+            fd = EventsNamed(lines, "fuel_drain");
+            AssertEq(fd.Count, 2, "both shades report on the same 60-tick stamp");
+            AssertEq(fd[0].Get("tick").I, 60, "stamp");
+            AssertEq(fd[1].Get("tick").I, 60, "stamp");
+            AssertEq(T(fd[0].Get("data").Get("shade_id")), "S1", "lines follow the snapshot id order");
+            AssertEq(T(fd[1].Get("data").Get("shade_id")), "S2", "second draining shade");
+            AssertEq(Math.Round(N(fd[0].Get("data").Get("fuel")), 1) == 14.3 ? 1 : 0, 1, "the beat prints the fuel at the top of the minute, before that minute's subtractions");
+            AssertEq(Math.Round(N(fd[1].Get("data").Get("fuel")), 1) == 14.2 ? 1 : 0, 1, "the second line sits one shade-step below the first");
+
+            // Top-up past the threshold pushes the shade that was drinking out to the zone edge
+            // within 30 ticks, no damage; and a drained top-up emits no fuel_drain lines on a
+            // run that ends before the next 60-tick beat.
+            lines = Run(63,
+                "{\"player\":{\"pos\":[0,0,-2],\"carried\":10},\"random_motes\":false,\"motes\":[],\"random_shades\":false," +
+                "\"shades\":[{\"id\":\"S1\",\"pos\":[6,0,0],\"state\":\"drain\",\"target_lantern_id\":\"L1\"}]," +
+                "\"lanterns\":[{\"id\":\"L1\",\"pos\":[0,0,0],\"lit\":true,\"fuel\":29.0}]}",
+                "{\"frames\":[{\"tick\":0,\"interact\":true}]}", 31, 31);
+            List<JsonValue> rf3 = EventsNamed(lines, "refuel");
+            AssertEq(rf3.Count, 1, "Mây tops the lantern up from the 2.0 m edge");
+            AssertEq(rf3[0].Get("tick").I, 1, "the press runs in step 0");
+            AssertEq(rf3[0].Get("data").Get("amount").I, 8, "used = ceil((100 - 99.9) / 10) = 8 motes at the beat-1 fuel");
+            AssertEq(Math.Round(N(rf3[0].Get("data").Get("fuel")), 1) == 100.0 ? 1 : 0, 1, "fuel caps at 100.0");
+            AssertEq(EventsNamed(lines, "fuel_drain").Count, 0, "the drink stops with the top-up");
+            AssertEq(EventsNamed(lines, "player_hit").Count, 0, "the pushed shade never damages Mây");
+            AssertEq(SnapAt(lines, 31).Get("score").I, 40, "eight topped motes score 8 x 5");
+            AssertEq(SnapAt(lines, 31).Get("player").Get("carried").I, 2, "10 - 8 motes");
+            AssertEq(OfType(lines, "end")[0].Get("ticks").I, 31, "the Night runs to the last tick");
+        }
+
+        private static void T27_WinRules()
+        {
+            // No early win: five lit lanterns at the start and the Night still runs its full length.
+            List<JsonValue> lines = Run(67,
+                "{\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[]," +
+                "\"lanterns\":[{\"id\":\"L1\",\"lit\":true},{\"id\":\"L2\",\"lit\":true},{\"id\":\"L3\",\"lit\":true}," +
+                "{\"id\":\"L4\",\"lit\":true},{\"id\":\"L5\",\"lit\":true}]}", null, 120, 120);
+            AssertEq(EventsNamed(lines, "game_over").Count, 0, "all lit no longer wins early");
+            AssertEq(T(OfType(lines, "end")[0].Get("state")), "playing", "the run uses all its ticks");
+            AssertEq(SnapAt(lines, 120).Get("lanterns").Arr_.Count, 5, "still five lanterns");
+            foreach (JsonValue l in SnapAt(lines, 120).Get("lanterns").Arr_)
+            {
+                Assert(B(l.Get("lit")), "the lantern is still lit at snapshot 120");
+                AssertEq(Math.Round(N(l.Get("fuel")), 1) == 98.0 ? 1 : 0, 1, "2.0 display fuel decayed over 120 ticks");
+            }
+
+            // Dawn below the threshold is a loss even with the clock run to the end: both lit
+            // lanterns starve to 0 at tick 6000, so 0/5 < ceil(0.6*5) = 3 lit at dawn.
+            lines = Run(67,
+                "{\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[]," +
+                "\"lanterns\":[{\"id\":\"L1\",\"lit\":true},{\"id\":\"L2\",\"lit\":true}]}", null, 14401, 14401);
+            List<JsonValue> outev = EventsNamed(lines, "lantern_out");
+            AssertEq(outev.Count, 2, "both full lanterns die after 600 s of decay");
+            AssertEq(outev[0].Get("tick").I, 6000, "L1 goes out on tick 6000");
+            AssertEq(outev[1].Get("tick").I, 6000, "and L2 in the same step, ids in order");
+            List<JsonValue> go = EventsNamed(lines, "game_over");
+            AssertEq(go.Count, 1, "game over at dawn");
+            AssertEq(T(go[0].Get("data").Get("reason")), "dawn", "reason dawn for below-threshold");
+            AssertEq(T(OfType(lines, "end")[0].Get("state")), "lost", "the Night is lost");
+            AssertEq(OfType(lines, "end")[0].Get("score").I, 0, "no dawn bonus on a loss");
+
+            // Exactly at the threshold: three lit of the island's five (ceil(0.6*5) = 3) and alive
+            // at time-up -> won. The scenario lights lanterns on the default island, it never
+            // shrinks it (see block B). Each lit lantern decayed one tick: floor(299/60) = 4 points.
+            lines = Run(67,
+                "{\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[]," +
+                "\"lanterns\":[{\"id\":\"L1\",\"lit\":true,\"fuel\":5.0},{\"id\":\"L2\",\"lit\":true,\"fuel\":5.0}," +
+                "{\"id\":\"L3\",\"lit\":true,\"fuel\":5.0}]," +
+                "\"time_left_s\":0.016666666666666666}", null, 5, 1);
+            JsonValue end = OfType(lines, "end")[0];
+            AssertEq(T(end.Get("state")), "won", "threshold met at dawn -> won");
+            AssertEq(end.Get("ticks").I, 1, "time crosses zero during step 0");
+            AssertEq(T(EventsNamed(lines, "game_over")[0].Get("data").Get("reason")), "dawn_survived", "reason dawn_survived");
+            AssertEq(end.Get("score").I, 3 * (50 + 4) + 3 * 50, "dawn bonus: +50+floor(fuel) per lantern, +50 per flame");
+
+            // One lantern short at the same dawn (2 lit of five, 2 < 3) -> lost, no bonus.
+            lines = Run(67,
+                "{\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[]," +
+                "\"lanterns\":[{\"id\":\"L1\",\"lit\":true,\"fuel\":5.0},{\"id\":\"L2\",\"lit\":true,\"fuel\":5.0}]," +
+                "\"time_left_s\":0.016666666666666666}", null, 5, 1);
+            AssertEq(T(OfType(lines, "end")[0].Get("state")), "lost", "one below the threshold at dawn -> lost");
+            AssertEq(T(EventsNamed(lines, "game_over")[0].Get("data").Get("reason")), "dawn", "reason dawn below threshold");
+            AssertEq(OfType(lines, "end")[0].Get("score").I, 0, "no dawn bonus on a loss");
+        }
+
+        private static void T28_CapacityScale()
+        {
+            StringBuilder motes = new StringBuilder("\"motes\":[");
+            for (int i = 1; i <= 18; i++) { if (i > 1) motes.Append(','); motes.Append("[0,0," + i.ToString(CultureInfo.InvariantCulture) + "]"); }
+            motes.Append(']');
+            string walk = "{\"frames\":[{\"tick\":0,\"move\":[0,1]}]}";
+
+            // successful_lights 3 -> capacity 16: sixteen pickups land, the 17th mote is refused.
+            List<JsonValue> lines = Run(71,
+                "{\"player\":{\"carried\":0,\"successful_lights\":3},\"random_motes\":false,\"random_shades\":false,\"shades\":[]," +
+                motes + "}", walk, 182, 182);
+            AssertEq(SnapAt(lines, 0).Get("player").Get("capacity").I, 16, "10 + 2*3");
+            AssertEq(EventsNamed(lines, "mote_picked").Count, 16, "pickups stop at the scaled cap");
+            AssertEq(SnapAt(lines, 182).Get("player").Get("carried").I, 16, "carried sits at the cap");
+            AssertEq(SnapAt(lines, 182).Get("score").I, 0, "pickups score nothing on their own");
+
+            // Plain baseline stays 10 (and the cap of 20): +2 per light only follows the counter.
+            lines = Run(71,
+                "{\"player\":{\"carried\":0},\"random_motes\":false,\"random_shades\":false,\"shades\":[]," + motes + "}",
+                walk, 122, 122);
+            AssertEq(SnapAt(lines, 0).Get("player").Get("capacity").I, 10, "baseline capacity");
+            AssertEq(EventsNamed(lines, "mote_picked").Count, 10, "pickups stop at 10");
+            lines = Run(71,
+                "{\"player\":{\"carried\":0,\"successful_lights\":8},\"random_motes\":false,\"motes\":[],\"random_shades\":false,\"shades\":[],\"lanterns\":[]}",
+                null, 1, 1);
+            AssertEq(SnapAt(lines, 0).Get("player").Get("capacity").I, 20, "10 + 16 is capped at capacity_max");
+        }
+
+        private static void T29_FieldsV12()
+        {
+            // The v1.2 scenario fields round-trip through the snapshot.
+            List<JsonValue> lines = Run(73,
+                "{\"player\":{\"successful_lights\":2},\"random_motes\":false,\"motes\":[],\"random_shades\":false," +
+                "\"shades\":[{\"id\":\"S1\",\"pos\":[31,0,0],\"state\":\"drain\",\"target_lantern_id\":\"L1\"}]," +
+                "\"lanterns\":[{\"id\":\"L1\",\"pos\":[30,0,0],\"lit\":true,\"fuel\":25.0},{\"id\":\"L2\",\"pos\":[40,0,0],\"lit\":true}]}",
+                null, 61, 61);
+            List<JsonValue> fd = EventsNamed(lines, "fuel_drain");
+            AssertEq(fd.Count, 1, "the scenario-placed drain shade reports once inside 61 ticks");
+            AssertEq(fd[0].Get("tick").I, 60, "fuel_drain lands on the 60-tick beat");
+            AssertEq(T(fd[0].Get("data").Get("lantern_id")), "L1", "scenario target_lantern_id wires the drain");
+            AssertEq(T(fd[0].Get("data").Get("shade_id")), "S1", "shade id in the event");
+            AssertEq(Math.Round(N(fd[0].Get("data").Get("fuel")), 1) == 19.1 ? 1 : 0, 1, "the beat prints the fuel at the top of the minute, before that minute's decay and drain");
+            JsonValue snap = SnapAt(lines, 61);
+            JsonValue s1 = snap.Get("shades").Arr_[0];
+            AssertEq(T(s1.Get("state")), "drain", "snapshot prints the drain state");
+            AssertNear(Axis(s1.Get("pos"), 0), 31.0, 2e-3, "a draining shade stands its ground");
+            AssertEq(T(snap.Get("lanterns").Arr_[0].Get("id")), "L1", "snapshot lantern order");
+            AssertEq(Math.Round(N(snap.Get("lanterns").Arr_[0].Get("fuel")), 1) == 19.0 ? 1 : 0, 1,
+                "1500 units - 60 decay - 300 drain = 19.0 once the minute's subtractions have run");
+            AssertEq(T(snap.Get("lanterns").Arr_[1].Get("id")), "L2", "second lantern");
+            AssertEq(Math.Round(N(snap.Get("lanterns").Arr_[1].Get("fuel")), 1) == 99.0 ? 1 : 0, 1, "lit without fuel starts at 100 and decays");
+            Assert(B(snap.Get("lanterns").Arr_[1].Get("ever_lit")) == false, "scenario-placed lit lanterns are not ever_lit");
+            AssertEq(snap.Get("lanterns").Arr_[1].Get("relit_count").I, 0, "relit_count starts at 0");
+            AssertEq(snap.Get("player").Get("capacity").I, 14, "scenario successful_lights lifts capacity");
+
+            // Malformed v1.2 fields go down the exit-2 path.
+            ThrowsFormat(() => Loader.ScenarioFromJson("{\"lanterns\":[{\"id\":\"L1\",\"lit\":true,\"fuel\":-1}]}"), "negative fuel");
+            ThrowsFormat(() => Loader.ScenarioFromJson("{\"lanterns\":[{\"id\":\"L1\",\"lit\":true,\"fuel\":\"hot\"}]}"), "fuel as a string");
+            ThrowsFormat(() => Loader.ScenarioFromJson("{\"lanterns\":[{\"id\":\"L1\",\"ever_lit\":\"yes\"}]}"), "ever_lit as a string");
+            ThrowsFormat(() => Loader.ScenarioFromJson("{\"shades\":[{\"pos\":[0,0,0],\"state\":\"fly\"}]}"), "unknown shade state stays rejected");
+            Assert(Loader.ScenarioFromJson("{\"shades\":[{\"pos\":[0,0,0],\"state\":\"drain\",\"target_lantern_id\":42}]}").Shades[0].TargetLanternId == null,
+                "a number in a text field falls back to 'unset' like the id fields do - the loader does not throw there");
+            ThrowsFormat(() => Loader.ScenarioFromJson("{\"player\":{\"successful_lights\":1.5}}"), "fractional successful_lights");
         }
 
         private static double NormalizeDeg(double deg)

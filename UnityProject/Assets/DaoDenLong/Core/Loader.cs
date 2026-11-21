@@ -39,6 +39,11 @@ namespace DaoDenLong.Core
                 if (p.Get("dash_cd_ticks") != null) { sc.HasPlayerTicks = true; sc.PlayerDashCdTicks = NonNegInt(p.Get("dash_cd_ticks"), "player.dash_cd_ticks"); }
                 if (p.Get("pulse_cd_ticks") != null) { sc.HasPlayerTicks = true; sc.PlayerPulseCdTicks = NonNegInt(p.Get("pulse_cd_ticks"), "player.pulse_cd_ticks"); }
                 if (p.Get("charm_ticks") != null) { sc.HasPlayerTicks = true; sc.PlayerCharmTicks = NonNegInt(p.Get("charm_ticks"), "player.charm_ticks"); }
+                if (p.Get("successful_lights") != null)   // v1.2 setup counter
+                {
+                    sc.HasPlayerSuccessfulLights = true;
+                    sc.PlayerSuccessfulLights = NonNegInt(p.Get("successful_lights"), "player.successful_lights");
+                }
             }
 
             if (root.Get("random_motes") != null)
@@ -92,19 +97,22 @@ namespace DaoDenLong.Core
                     if (s.Get("state") != null)
                     {
                         string st = Need(s.Get("state"), "shades[" + i + "].state").Text(null);
-                        if (st != "spawning" && st != "wander" && st != "chase" && st != "recoil" && st != "stunned")
-                            throw new FormatException("scenario: shades[" + i + "].state must be one of spawning/wander/chase/recoil/stunned");
+                        if (st != "spawning" && st != "wander" && st != "chase" && st != "recoil" && st != "stunned" && st != "drain")   // v1.2 adds drain
+                            throw new FormatException("scenario: shades[" + i + "].state must be one of spawning/wander/chase/recoil/stunned/drain");
                         sp.HasState = true;
                         sp.State = st == "spawning" ? ShadeState.spawning
                              : st == "wander" ? ShadeState.wander
                              : st == "chase" ? ShadeState.chase
-                             : st == "recoil" ? ShadeState.recoil : ShadeState.stunned;
+                             : st == "recoil" ? ShadeState.recoil
+                             : st == "drain" ? ShadeState.drain : ShadeState.stunned;
                     }
                     if (s.Get("state_ticks_left") != null)
                     {
                         sp.HasStateTicksLeft = true;
                         sp.StateTicksLeft = NonNegInt(s.Get("state_ticks_left"), "shades[" + i + "].state_ticks_left");
                     }
+                    if (s.Get("target_lantern_id") != null)   // v1.2
+                        sp.TargetLanternId = Need(s.Get("target_lantern_id"), "shades[" + i + "].target_lantern_id").Text(null);
                     sc.Shades.Add(sp);
                 }
             }
@@ -128,6 +136,17 @@ namespace DaoDenLong.Core
                         lu.HasDeposited = true;
                         lu.Deposited = (int)Need(l.Get("deposited"), "lanterns[" + i + "].deposited").Num(-1);
                         if (lu.Deposited < 0) throw new FormatException("scenario: deposited must be >= 0");
+                    }
+                    if (l.Get("fuel") != null)    // v1.2: fuel points, a real number (1 decimal is what we print)
+                    {
+                        double f = Need(l.Get("fuel"), "lanterns[" + i + "].fuel").Num(-1);
+                        if (f < 0) throw new FormatException("scenario: fuel must be >= 0");
+                        lu.HasFuel = true; lu.Fuel = f;
+                    }
+                    if (l.Get("ever_lit") != null)    // v1.2
+                    {
+                        RequireBool(l.Get("ever_lit"), "lanterns[" + i + "].ever_lit");
+                        lu.HasEverLit = true; lu.EverLit = l.Get("ever_lit").B;
                     }
                     sc.Lanterns.Add(lu);
                 }
