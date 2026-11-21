@@ -1,5 +1,31 @@
 # CHANGELOG
 
+## [Phase 4] — 2026-11-21
+- Contract bumped to **v1.3**: `bench_cmd` and `soak_cmd` keys appended after `headless_cmd`
+  (published key order; `tuning` untouched, so T19's pin still holds). **No simulation byte
+  changed** — the determinism double-run still hashes
+  `4F2636A777616E6EBAE96BD4864A8DF676927B8945C4A97433B0904F85A69B7D`.
+- **Benchmark mode** (`--bench`): the spec scene — seed 42, Night 1, exactly 200 wander shades +
+  100 motes scattered by the core RNG (`Core/Bench.cs`), L1–L3 lit at fuel 100, no spawns/damage/
+  pickup/fuel-decay/end-conditions (the `Bench` gates in `Simulation.cs`), no input, 3 s warmup
+  then a measured real-time window, avg fps / 1%-low fps / nearest-rank p95. Self-run evidence
+  `docs/proof/phase-4/bench.json`; the Unity GUI path (1280×720, vsync off, 15 s orbit) is
+  `View/BenchMode.cs`, license-gated on this machine — documented in the proof notes.
+- **Soak test** (`--soak`): 10 nights in one process, Night 1→2→3 cycling, seeded random-input
+  bot (`Core/SoakInputs.cs`: direction re-rolled every 30 ticks, jump 5 % / dash 3 % / pulse 2 %
+  / interact 10 %), crash count + start/end memory. Real run: **0 crashes**; the 2.59× memory
+  ratio is one-time JIT/GC warm-up — plateau proof in `docs/proof/phase-4/notes.md`.
+- **Local leaderboard** (`Core/Leaderboard.cs` + `--export-leaderboard out.json`): name rule
+  `[A-Za-z0-9_]{3,12}` (Vietnamese diacritics accepted as the bonus), top 10, score desc, ties
+  broken by earlier `achieved_at`. Round-trip evidence in `docs/proof/phase-4/`.
+- Tests grown 29 → **31** (T30 leaderboard rules, T31 soak-input determinism), all green — real
+  output `docs/proof/phase-4/tests.txt`. Docker (`Dockerfile`) runs build+tests+bench+soak on
+  Linux for real: `docs/proof/phase-4/docker-linux.md`.
+- Packaging & docs: README install/run ≤3 commands + controls + test instructions, demo video
+  (see Release v1.0.0), CREDITS/LICENSE pass, full-retro, accessibility items mapped as manual
+  Unity checks in `docs/specs/PHASE-4-SPEC.md` (editor license on this machine — unchanged note
+  from Phase 1).
+
 ## [Phase 3] — 2026-11-21
 - **Breaking** contract bumped to v1.2 for the lantern fuel rules. Eight tuning keys appended
   after `night3_duration_s` in published order, then the score block; standard values locked

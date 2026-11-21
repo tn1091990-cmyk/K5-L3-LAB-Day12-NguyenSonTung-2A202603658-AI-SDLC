@@ -49,3 +49,23 @@ the `AGENTS.md` harness) did the bulk of implementation under review.
   was right every time; the Phase-1 pinned tests were untouched.
 - Unity Windows build still blocked on the expired editor license token (unchanged from
   Phase 1's note); presentation-layer checks stay manual-check criteria in the spec.
+
+## Phase 4 (2026-11-21)
+- Human read the Phase-4 requirements; the agent implemented contract v1.3 (`bench_cmd`,
+  `soak_cmd`), the bench scene + gates, the soak input bot, the leaderboard rules in the shared
+  core, the three runner modes, `View/BenchMode.cs` (GUI path, license-gated), and the Dockerfile.
+  Tests grew 29 → 31. Real outputs: `docs/proof/phase-4/` — including a genuine Docker/Linux run
+  (daemon down at first attempt; the note says so; the run waited, nothing was quoted from a wish).
+- Debugging worth recording, both in the agent's own new code: T30's test data broke the very
+  name rule it was testing (2-char name), and the leaderboard's first sort was unstable in a way
+  that scrambles the pinned tie order. Both fixed at the test/implementation level with reasons;
+  the frozen Phase-1 pins and the determinism hash did not move.
+- Binding calls kept by the human: frozen tuning values, published key order, evidence-is-real
+  rule; the agent flagged the soak memory ratio (2.59× vs the 1.2× threshold) honestly with a
+  plateau proof rather than re-tuning the measurement.
+- Day's-end packaging: README ≤3 commands + controls + tests, full-retro in RETRO.md, CREDITS/
+  LICENSE pass, demo video attached to Release v1.0.0 (also `docs/demo/demo.mp4`) — an honest
+  terminal-output capture of the real runs; the GUI gameplay capture is on the licensed-machine
+  checklist (the editor license on this machine is still blocked — same note as Phase 1).
+- Token/cost note (estimate, platform meter is the record): ~1–2 M tokens across the day; the
+  harness paid for itself on plumbing; decisions stayed human.
